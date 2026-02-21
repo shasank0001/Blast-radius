@@ -11,7 +11,13 @@ from mcp.server.fastmcp import FastMCP
 
 from blast_radius_mcp.cache.keys import build_cache_key
 from blast_radius_mcp.cache.sqlite import CacheDB
-from blast_radius_mcp.ids import canonical_json, compute_query_id
+from blast_radius_mcp.ids import (
+    canonical_json,
+    compute_diff_hash,
+    compute_query_id,
+    compute_run_id,
+    normalize_intent,
+)
 from blast_radius_mcp.logging_config import get_logger, setup_logging
 from blast_radius_mcp.repo.fingerprint import compute_repo_fingerprint
 from blast_radius_mcp.schemas.common import (
@@ -97,6 +103,16 @@ async def execute_tool(
 
         # Compute deterministic IDs
         canonical_req = canonical_json(envelope.inputs)
+        intent_norm = normalize_intent(str(envelope.options.get("intent", "")))
+        anchors_norm = sorted(envelope.anchors)
+        diff_hash = compute_diff_hash(envelope.diff)
+        run_id = compute_run_id(
+            envelope.schema_version,
+            intent_norm,
+            anchors_norm,
+            diff_hash,
+            repo_fingerprint.fingerprint_hash,
+        )
         query_id = compute_query_id(
             tool_name, canonical_req, repo_fingerprint.fingerprint_hash
         )
@@ -108,17 +124,29 @@ async def execute_tool(
             tool_impl_version=tool_impl_version,
         )
 
-        # Check cache
         cache = _get_cache()
+        cache.store_run(
+            run_id=run_id,
+            repo_root=envelope.repo_root,
+            repo_fp=repo_fingerprint.model_dump(),
+            intent=intent_norm,
+            anchors=anchors_norm,
+            diff_hash=diff_hash,
+        )
+
+        # Check cache
         cached_response = cache.get_cached_result(cache_key)
         if cached_response is not None:
             # Cache hit — update timing and cached flag
             timing_ms = int((time.perf_counter() - start) * 1000)
             cached_response["cached"] = True
             cached_response["timing_ms"] = timing_ms
+            cached_response["run_id"] = run_id
+            cached_response["query_id"] = query_id
             logger.info(
                 "Cache hit",
                 extra={
+                    "run_id": run_id,
                     "tool_name": tool_name,
                     "query_id": query_id,
                     "cached": True,
@@ -135,7 +163,7 @@ async def execute_tool(
         response = ToolResponseEnvelope(
             schema_version=settings.SCHEMA_VERSION,
             tool_name=tool_name,
-            run_id="pending",  # Will be set by orchestrator
+            run_id=run_id,
             query_id=query_id,
             repo_fingerprint=repo_fingerprint,
             cached=False,
@@ -150,7 +178,7 @@ async def execute_tool(
             cache_key=cache_key,
             tool_name=tool_name,
             query_id=query_id,
-            run_id="pending",
+            run_id=run_id,
             repo_fp_hash=repo_fingerprint.fingerprint_hash,
             request_json=canonical_req,
             response_json=json.dumps(response_dict),
@@ -160,6 +188,7 @@ async def execute_tool(
         logger.info(
             "Tool executed",
             extra={
+                "run_id": run_id,
                 "tool_name": tool_name,
                 "query_id": query_id,
                 "cached": False,

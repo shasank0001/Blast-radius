@@ -27,6 +27,7 @@ from blast_radius_mcp.schemas.tool1_ast import (
     ImportMetadata,
     InheritanceMetadata,
     NodeAttributes,
+    ReferenceMetadata,
     TargetRef,
     Tool1Options,
     Tool1Request,
@@ -193,6 +194,15 @@ def parse_python_file(
             ),
         )
         return None, diag
+
+
+def _tree_sitter_available() -> bool:
+    """Return whether the ``tree_sitter`` dependency is importable."""
+    try:
+        __import__("tree_sitter")
+        return True
+    except Exception:
+        return False
 
 
 # ── Signature extraction ─────────────────────────────────────────────
@@ -766,6 +776,65 @@ def emit_edges(
                         )
                     )
 
+    # ── Reference edges ──────────────────────────────────────────────
+    if options.include_references:
+        reference_edges: list[tuple[int, int, str, str, ASTEdge]] = []
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Name):
+                continue
+
+            line = node.lineno
+            col = node.col_offset
+            ref_name = node.id
+
+            if isinstance(node.ctx, ast.Store):
+                ref_context = "store"
+            elif isinstance(node.ctx, ast.Del):
+                ref_context = "del"
+            else:
+                ref_context = "load"
+
+            enclosing = _find_enclosing_scope(symbol_table, line, col)
+            target_ref, confidence, strategy = _lookup_symbol(
+                ref_name, symbol_table, alias_map,
+            )
+            eid = _compute_edge_id(
+                enclosing.id,
+                "references",
+                f"{ref_name}:{ref_context}",
+                line,
+                col,
+            )
+            snippet = _snippet_from_lines(
+                source_lines, line, line, options.max_snippet_chars,
+            )
+
+            edge = ASTEdge(
+                id=eid,
+                type="references",
+                source=enclosing.id,
+                target=target_ref.symbol_id,
+                target_ref=target_ref,
+                range=Range(
+                    start=Position(line=line, col=col),
+                    end=Position(line=line, col=col + len(ref_name)),
+                ),
+                confidence=confidence,
+                resolution=EdgeResolution(
+                    status="resolved" if target_ref.kind != "unresolved" else "unresolved",
+                    strategy=strategy,
+                ),
+                snippet=snippet,
+                metadata=EdgeMetadata(
+                    reference=ReferenceMetadata(name=ref_name, context=ref_context),
+                ),
+            )
+            reference_edges.append((line, col, ref_name, ref_context, edge))
+
+        reference_edges.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        edges.extend(edge for _, _, _, _, edge in reference_edges)
+
     return edges
 
 
@@ -895,13 +964,34 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
     parsed_ok = 0
     parsed_error = 0
 
+    parse_mode = request.options.parse_mode
+    if parse_mode == "tree_sitter" and not _tree_sitter_available():
+        diagnostics.append(
+            Diagnostic(
+                file="",
+                severity="warning",
+                message=(
+                    "parse_mode 'tree_sitter' requested but tree_sitter is unavailable; "
+                    "falling back to 'python_ast'"
+                ),
+                range=Range(
+                    start=Position(line=1, col=0),
+                    end=Position(line=1, col=0),
+                ),
+            )
+        )
+        parse_mode = "python_ast"
+
     for fi in file_infos:
         if fi.parse_status == "error":
             parsed_error += 1
             continue
 
         source = sources[fi.path]
-        tree, diag = parse_python_file(source, fi.path)
+        if parse_mode == "tree_sitter":
+            tree, diag = parse_python_file(source, fi.path)
+        else:
+            tree, diag = parse_python_file(source, fi.path)
 
         if diag is not None:
             diagnostics.append(diag)

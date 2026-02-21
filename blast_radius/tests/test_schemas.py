@@ -341,6 +341,22 @@ class TestValidation:
         with pytest.raises(ValidationError):
             validate_request({"bad": "data"}, "get_ast_dependencies")
 
+    def test_validate_response_tool1(self):
+        data = load_fixture("tool1_response.json")
+        envelope = validate_response(data, "get_ast_dependencies")
+        assert envelope.tool_name == "get_ast_dependencies"
+
+    def test_validate_response_tool_name_mismatch(self):
+        data = load_fixture("tool1_response.json")
+        with pytest.raises(ValueError, match="tool_name mismatch"):
+            validate_response(data, "trace_data_shape")
+
+    def test_validate_response_result_schema_mismatch(self):
+        data = load_fixture("tool2_response.json")
+        data["tool_name"] = "get_ast_dependencies"
+        with pytest.raises(ValidationError):
+            validate_response(data, "get_ast_dependencies")
+
     def test_all_tool_names_registered(self):
         expected = {
             "get_ast_dependencies",

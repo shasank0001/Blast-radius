@@ -161,6 +161,28 @@ class TestCacheDB:
         assert removed == 0
         assert cache_db.get_cached_result("fresh") is not None
 
+    def test_cleanup_prunes_when_over_size_limit(self, cache_db):
+        large_payload = "x" * 800_000
+        for i in range(4):
+            cache_db.store_result(
+                cache_key=f"big_{i}",
+                tool_name="t",
+                query_id=f"q_{i}",
+                run_id=f"r_{i}",
+                repo_fp_hash="fp",
+                request_json="{}",
+                response_json=json.dumps({"data": large_payload, "i": i}),
+                timing_ms=10,
+            )
+
+        before = cache_db.get_stats()["tool_results"]
+        removed = cache_db.cleanup(max_age_days=3650, max_size_mb=1)
+        after = cache_db.get_stats()["tool_results"]
+
+        assert before == 4
+        assert removed > 0
+        assert after < before
+
 
 class TestBuildCacheKey:
     def test_deterministic(self):

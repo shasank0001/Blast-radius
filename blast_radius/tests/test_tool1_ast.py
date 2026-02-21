@@ -27,6 +27,7 @@ from blast_radius_mcp.schemas.tool1_ast import (
     Tool1Result,
     Tool1Stats,
 )
+from blast_radius_mcp.tools import tool1_ast_engine
 from blast_radius_mcp.tools.tool1_ast_engine import (
     _build_import_alias_map,
     _compute_edge_id,
@@ -408,6 +409,81 @@ class TestEmitEdges:
         for e in edges:
             assert 0.0 <= e.confidence <= 1.0, f"Confidence {e.confidence} out of range"
 
+    def test_reference_edges_emit_metadata(self):
+        source = textwrap.dedent("""\
+        x = 1
+
+        def f():
+            y = x
+            del y
+        """)
+        tree, nodes, source_lines = _parse_and_build(source, "refs.py")
+        options = Tool1Options(
+            include_import_edges=False,
+            include_call_edges=False,
+            include_inheritance_edges=False,
+            include_references=True,
+        )
+
+        edges = emit_edges(tree, "refs.py", nodes, options, source_lines)
+        ref_edges = [e for e in edges if e.type == "references"]
+
+        assert len(ref_edges) >= 4
+        contexts = {
+            e.metadata.reference.context
+            for e in ref_edges
+            if e.metadata.reference is not None
+        }
+        assert {"load", "store", "del"}.issubset(contexts)
+        for edge in ref_edges:
+            assert edge.metadata.reference is not None
+            assert edge.metadata.reference.name
+
+    def test_reference_edges_deterministic_order(self):
+        source = textwrap.dedent("""\
+        x = 1
+
+        def f():
+            y = x
+            del y
+        """)
+        options = Tool1Options(
+            include_import_edges=False,
+            include_call_edges=False,
+            include_inheritance_edges=False,
+            include_references=True,
+        )
+
+        tree1, nodes1, source_lines1 = _parse_and_build(source, "refs.py")
+        edges1 = emit_edges(tree1, "refs.py", nodes1, options, source_lines1)
+        refs1 = [
+            (
+                e.id,
+                e.range.start.line,
+                e.range.start.col,
+                e.metadata.reference.name if e.metadata.reference else "",
+                e.metadata.reference.context if e.metadata.reference else "",
+            )
+            for e in edges1
+            if e.type == "references"
+        ]
+
+        tree2, nodes2, source_lines2 = _parse_and_build(source, "refs.py")
+        edges2 = emit_edges(tree2, "refs.py", nodes2, options, source_lines2)
+        refs2 = [
+            (
+                e.id,
+                e.range.start.line,
+                e.range.start.col,
+                e.metadata.reference.name if e.metadata.reference else "",
+                e.metadata.reference.context if e.metadata.reference else "",
+            )
+            for e in edges2
+            if e.type == "references"
+        ]
+
+        assert refs1 == refs2
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 8. TestCrossFileResolution
@@ -521,6 +597,24 @@ class TestDeterminism:
             return d
 
         assert strip_timing(r1) == strip_timing(r2)
+
+
+class TestParseModes:
+    def test_tree_sitter_unavailable_falls_back_with_warning(self, tmp_path, monkeypatch):
+        (tmp_path / "mod.py").write_text("x = 1\n", encoding="utf-8")
+        monkeypatch.setattr(tool1_ast_engine, "_tree_sitter_available", lambda: False)
+
+        req = Tool1Request(
+            target_files=["mod.py"],
+            options=Tool1Options(parse_mode="tree_sitter"),
+        )
+        result_dict = run_tool1(req, str(tmp_path))
+        result = Tool1Result(**result_dict)
+
+        warnings = [d for d in result.diagnostics if d.severity == "warning"]
+        assert len(warnings) >= 1
+        assert "falling back to 'python_ast'" in warnings[0].message
+        assert result.stats.parsed_ok == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════

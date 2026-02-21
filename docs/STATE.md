@@ -3,7 +3,7 @@
 > **Last Updated**: 2026-02-21  
 > **Repository**: https://github.com/shasank0001/Blast-radius.git  
 > **Branch**: `main`  
-> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 177 passing (0 failures)
+> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 186 passing (0 failures)
 
 ---
 
@@ -67,11 +67,12 @@ blast_radius/
 │   └── run_mcp_server.py                   # Convenience entry point
 └── tests/
     ├── conftest.py
-    ├── test_schemas.py                     # 55 tests — golden fixtures, validation, settings
+    ├── test_schemas.py                     # 58 tests — golden fixtures, validation, settings
     ├── test_ids.py                         # 24 tests — deterministic ID generation
     ├── test_fingerprint.py                 # 16 tests — repo I/O and fingerprinting
-    ├── test_cache.py                       # 20 tests — SQLite cache + cache keys
-    ├── test_tool1_ast.py                   # 62 tests — AST engine unit + integration
+    ├── test_cache.py                       # 21 tests — SQLite cache + cache keys
+    ├── test_tool1_ast.py                   # 65 tests — AST engine unit + integration
+    ├── test_server.py                      # 2 tests — execute_tool deterministic run/cache behavior
     └── fixtures/
         ├── tool1_request.json
         ├── tool1_response.json
@@ -114,7 +115,7 @@ blast_radius/
 7. Cache tables: `runs`, `tool_results`, `artifacts` (3-table schema)
 8. Safe file I/O — path traversal protection via `safe_read_file()`
 9. Repo fingerprinting: git HEAD + dirty flag + SHA-256 of all `.py` file contents
-10. Server uses shared `execute_tool()` helper: parse envelope → validate → fingerprint → check cache → execute → store → return
+10. Server uses shared `execute_tool()` helper: parse envelope → validate → fingerprint → compute IDs → check cache → execute → store → return
 
 ---
 
@@ -201,7 +202,7 @@ blast_radius/
   - `store_result()` — INSERT OR REPLACE with timestamp
   - `store_run()` — INSERT OR IGNORE (idempotent)
   - `store_artifact()` — INSERT OR REPLACE
-  - `cleanup(max_age_days=30)` — deletes old tool_results, returns count
+  - `cleanup(max_age_days=30, max_size_mb=500)` — deletes old rows by age and enforces max DB size by pruning oldest `tool_results`
   - `get_stats()` — row counts for all 3 tables
 - `cache/keys.py`:
   - `build_cache_key(tool_name, schema_version, request_dict, repo_fp_hash, impl_version)` — serializes request via `canonical_json()` then delegates to `compute_cache_key()`
@@ -209,12 +210,14 @@ blast_radius/
 **Phase 2.4 — Wire Cache + IDs into Server**
 - Rewrote `server.py` with shared `execute_tool()` helper function
 - Pipeline: parse envelope → validate inputs → compute repo fingerprint → build cache key → check cache → on miss: execute tool builder, store result → return `ToolResponseEnvelope`
+- Deterministic `run_id` is computed in `execute_tool()` from schema version + normalized intent + sorted anchors + diff hash + repo fingerprint
+- `store_run()` is called for every request (idempotent by `run_id`)
 - Lazy `_get_cache()` singleton for `CacheDB` (created on first call)
 - Each tool registers via `@mcp.tool()` and delegates to `execute_tool()` with a stub `_build_toolN_result()` function
 - Tool implementation versions tracked: `TOOL1_IMPL_VERSION = "1.0.0"` through `TOOL5_IMPL_VERSION = "1.0.0"`
 - Timing via `time.perf_counter()` → `timing_ms`
 - `query_id` and `cache_key` computed using real fingerprint hash
-- Cache hit returns stored response with `cached=True`
+- Cache hit returns stored response with `cached=True` and refreshed deterministic `run_id`/`query_id`
 
 ### Acceptance Criteria Met
 - ✅ Same inputs → identical IDs across runs
@@ -228,20 +231,22 @@ blast_radius/
 - ✅ Different repo fingerprint → cache miss
 - ✅ WAL and synchronous pragmas set
 - ✅ Second call with identical inputs returns `cached=True`
-- ✅ `pytest tests/` — 115 tests passing
+- ✅ `run_id` is deterministic and persisted in cache runs table
+- ✅ `pytest tests/` — 186 tests passing
 
 ---
 
 ## Milestone 3 Summary — Tool 1: AST Structural Engine
 
 **Commit**: `3aaf699`  
-**Tests**: 177 passing (115 M1+M2 + 62 M3)  
+**Tests**: 186 passing (includes post-M3 hardening + server tests)  
 
 ### What was built
 
 **Phase 3.1 — File Ingestion & Parsing**
 - `load_and_hash_files(repo_root, target_files)` — reads files via `safe_read_file()`, computes SHA-256 per file, returns `list[FileInfo]` + source text dict
 - `parse_python_file(source, file_path)` — uses stdlib `ast.parse()`, returns `(tree, None)` on success or `(None, Diagnostic)` on SyntaxError
+- `parse_mode` is now consumed from Tool1 options; `tree_sitter` mode gracefully falls back to `python_ast` with a warning diagnostic when unavailable
 - Graceful handling of missing files (FileInfo with `parse_status="error"`)
 
 **Phase 3.2 — Symbol Table & Node Emission**
@@ -255,10 +260,11 @@ blast_radius/
 - `_extract_exports()` — reads `__all__` list from module body
 
 **Phase 3.3 — Edge Emission**
-- `emit_edges(tree, file_path, symbol_table, options, source_lines)` — emits 3 edge types:
+- `emit_edges(tree, file_path, symbol_table, options, source_lines)` — emits 4 edge types:
   - **Import edges** (`type="imports"`): from `ast.Import`/`ast.ImportFrom`, source=module node, metadata has module/name/alias/level
   - **Call edges** (`type="calls"`): from `ast.Call`, source=enclosing function/method, callee resolved via import alias map + symbol table, confidence 0.9/0.6/0.3
   - **Inheritance edges** (`type="inherits"`): from `ast.ClassDef.bases`, source=class node, target=base class
+  - **Reference edges** (`type="references"`): from `ast.Name`, metadata includes `{name, context}` where context is `load|store|del`
 - Edge ID: `edge_` + 16 hex chars from `sha256("edge" + source_id + type + target + line + col)`
 - `_find_enclosing_scope()` — finds which function/method/module node contains a given line
 - `_build_import_alias_map()` — maps `alias → (module_path, original_name)` for resolution
@@ -297,11 +303,13 @@ blast_radius/
 - ✅ Import edges link modules correctly
 - ✅ Call edges emitted with evidence spans and confidence scores
 - ✅ Inheritance edges from ClassDef.bases present
+- ✅ Reference edges emitted deterministically when `include_references=True`
 - ✅ Unresolved targets explicit (not silently dropped)
+- ✅ `tree_sitter` parse mode fallback emits warning diagnostics and still parses successfully
 - ✅ Cross-file imports resolve to concrete module/symbol nodes
 - ✅ Two identical runs produce identical JSON output (determinism)
 - ✅ Server `get_ast_dependencies` returns fully populated, schema-valid response
-- ✅ `pytest tests/` — 177 tests passing
+- ✅ `pytest tests/` — 186 tests passing
 
 ---
 
@@ -325,9 +333,10 @@ Phases:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
-| `test_schemas.py` | 55 | Schemas, fixtures, validation, settings, JSON export |
+| `test_schemas.py` | 58 | Schemas, fixtures, validation, settings, JSON export |
 | `test_ids.py` | 24 | canonical_json, run_id, query_id, cache_key, normalize, diff_hash |
 | `test_fingerprint.py` | 16 | safe_read_file, glob_python_files, file_hash, repo fingerprint |
-| `test_cache.py` | 20 | CacheDB CRUD, stats, cleanup, build_cache_key |
-| `test_tool1_ast.py` | 62 | AST engine: nodes, edges, cross-file, determinism, integration |
-| **Total** | **177** | **All passing** |
+| `test_cache.py` | 21 | CacheDB CRUD, stats, cleanup (age + size cap), build_cache_key |
+| `test_tool1_ast.py` | 65 | AST engine: nodes, edges, cross-file, determinism, parse-mode fallback, integration |
+| `test_server.py` | 2 | execute_tool deterministic `run_id` persistence + cache-hit behavior |
+| **Total** | **186** | **All passing** |

@@ -258,6 +258,19 @@ class CacheDB:
         ).isoformat()
 
         removed = 0
+
+        def _current_db_size_bytes() -> int:
+            db_path = Path(self._db_path)
+            total = 0
+            for candidate in (
+                db_path,
+                Path(f"{db_path}-wal"),
+                Path(f"{db_path}-shm"),
+            ):
+                if candidate.exists():
+                    total += candidate.stat().st_size
+            return total
+
         with self._lock:
             conn = self._get_connection()
             try:
@@ -277,11 +290,35 @@ class CacheDB:
 
                 conn.commit()
 
-                # Reclaim space
-                conn.execute("PRAGMA incremental_vacuum")
+                # Reclaim space before size checks.
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("VACUUM")
+
+                # Enforce max size by pruning oldest tool results.
+                max_size_bytes = max_size_mb * 1024 * 1024
+                if max_size_bytes > 0:
+                    while _current_db_size_bytes() > max_size_bytes:
+                        cursor = conn.execute(
+                            """DELETE FROM tool_results
+                               WHERE cache_key IN (
+                                   SELECT cache_key
+                                   FROM tool_results
+                                   ORDER BY created_at ASC
+                                   LIMIT 100
+                               )"""
+                        )
+                        pruned = cursor.rowcount
+                        if pruned <= 0:
+                            break
+                        removed += pruned
+                        conn.commit()
+                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        conn.execute("VACUUM")
 
                 logger.info(
-                    f"Cache cleanup: removed {removed} entries older than {max_age_days} days"
+                    "Cache cleanup: removed "
+                    f"{removed} entries older than {max_age_days} days "
+                    f"(target_size_mb={max_size_mb})"
                 )
             finally:
                 conn.close()

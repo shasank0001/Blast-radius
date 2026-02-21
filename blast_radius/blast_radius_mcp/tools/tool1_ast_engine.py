@@ -865,10 +865,15 @@ def emit_edges(
                 col = node.col_offset
                 callee_text = _resolve_callee_text(node)
                 enclosing = _find_enclosing_scope(symbol_table, line, col)
-                alias_view = _alias_view_for_scope(enclosing.id)
-                target_ref, confidence, strategy = _lookup_symbol(
-                    callee_text, symbol_table, alias_view,
-                )
+                if options.resolve_calls:
+                    alias_view = _alias_view_for_scope(enclosing.id)
+                    target_ref, confidence, strategy = _lookup_symbol(
+                        callee_text, symbol_table, alias_view,
+                    )
+                else:
+                    target_ref = TargetRef(kind="unresolved", qualified_name=callee_text)
+                    confidence = 0.3
+                    strategy = "unknown"
                 eid = _compute_edge_id(
                     enclosing.id, "calls", callee_text, line, col,
                 )
@@ -1073,6 +1078,7 @@ def resolve_cross_file_edges(
     parent_scopes_by_file: dict[str, dict[str, str | None]],
     scope_kinds_by_file: dict[str, dict[str, str]],
     node_file_by_id: dict[str, str],
+    options: Tool1Options,
 ) -> list[ASTEdge]:
     """Attempt to resolve unresolved edges against the cross-file index.
 
@@ -1081,6 +1087,13 @@ def resolve_cross_file_edges(
     resolved_edges: list[ASTEdge] = []
 
     for edge in edges:
+        if edge.type == "imports" and not options.resolve_imports:
+            resolved_edges.append(edge)
+            continue
+        if edge.type == "calls" and not options.resolve_calls:
+            resolved_edges.append(edge)
+            continue
+
         if edge.resolution.status == "unresolved" and edge.target_ref.qualified_name:
             qname = edge.target_ref.qualified_name
 
@@ -1190,6 +1203,23 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
     parsed_error = 0
 
     parse_mode = request.options.parse_mode
+    if request.options.python_version != "3.11":
+        diagnostics.append(
+            Diagnostic(
+                file="",
+                severity="warning",
+                message=(
+                    f"python_version '{request.options.python_version}' requested but only "
+                    "Python 3.11 parsing semantics are currently supported; continuing with 3.11"
+                ),
+                range=Range(
+                    start=Position(line=1, col=0),
+                    end=Position(line=1, col=0),
+                ),
+                code="python_version_unsupported",
+            )
+        )
+
     if parse_mode == "tree_sitter" and not _tree_sitter_available():
         diagnostics.append(
             Diagnostic(
@@ -1293,6 +1323,7 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
         parent_scopes_by_file,
         scope_kinds_by_file,
         node_file_by_id,
+        request.options,
     )
 
     # Step 8: Finalize and sort

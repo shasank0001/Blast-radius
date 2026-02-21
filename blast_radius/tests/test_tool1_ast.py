@@ -801,6 +801,58 @@ class TestParseModes:
         assert "falling back to 'python_ast'" in warnings[0].message
         assert result.stats.parsed_ok == 1
 
+    def test_resolve_calls_false_keeps_call_edges_unresolved(self, tmp_path):
+        (tmp_path / "mod.py").write_text(
+            textwrap.dedent("""\
+            def helper():
+                return 1
+
+            def run():
+                return helper()
+            """),
+            encoding="utf-8",
+        )
+
+        req = Tool1Request(
+            target_files=["mod.py"],
+            options=Tool1Options(resolve_calls=False),
+        )
+        result = Tool1Result(**run_tool1(req, str(tmp_path)))
+        call_edges = [e for e in result.edges if e.type == "calls"]
+
+        assert call_edges
+        assert all(e.resolution.status == "unresolved" for e in call_edges)
+
+    def test_resolve_imports_false_keeps_import_edges_unresolved(self, tmp_path):
+        (tmp_path / "a.py").write_text("from b import helper\n", encoding="utf-8")
+        (tmp_path / "b.py").write_text(
+            "def helper():\n    return 1\n",
+            encoding="utf-8",
+        )
+
+        req = Tool1Request(
+            target_files=["a.py", "b.py"],
+            options=Tool1Options(resolve_imports=False),
+        )
+        result = Tool1Result(**run_tool1(req, str(tmp_path)))
+        import_edges = [e for e in result.edges if e.type == "imports"]
+
+        assert import_edges
+        assert all(e.resolution.status == "unresolved" for e in import_edges)
+
+    def test_python_version_non_default_emits_warning_and_continues(self, tmp_path):
+        (tmp_path / "mod.py").write_text("x = 1\n", encoding="utf-8")
+
+        req = Tool1Request(
+            target_files=["mod.py"],
+            options=Tool1Options(python_version="3.10"),
+        )
+        result = Tool1Result(**run_tool1(req, str(tmp_path)))
+
+        assert result.stats.parsed_ok == 1
+        codes = [d.code for d in result.diagnostics if d.code]
+        assert "python_version_unsupported" in codes
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 10. TestRunTool1Integration

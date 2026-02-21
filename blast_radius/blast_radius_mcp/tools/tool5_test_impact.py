@@ -773,6 +773,15 @@ def run_tool5(validated_inputs: dict, repo_root: str) -> dict:
     all_diagnostics: list[Tool5Diagnostic] = []
     options = request.options
 
+    if options.coverage_mode == "optional":
+        all_diagnostics.append(
+            Tool5Diagnostic(
+                severity="info",
+                code="coverage_unavailable",
+                message="Coverage data not provided; falling back to static evidence-only scoring.",
+            )
+        )
+
     # ── 1. Discover tests ────────────────────────────────────────────
     test_files, disc_diags = discover_tests(repo_root)
     all_diagnostics.extend(disc_diags)

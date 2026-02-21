@@ -537,9 +537,7 @@ def run_tool4(validated_inputs: dict, repo_root: str) -> dict:
                 )
             )
 
-    # If no valid paths remain we can still try to analyse history,
-    # but the final targets list will be empty.
-    target_files = valid_paths if valid_paths else file_paths
+    valid_path_set = set(valid_paths)
 
     # ── 2. Check for .git directory ──────────────────────────────────
     git_dir = os.path.join(repo_root, ".git")
@@ -632,12 +630,15 @@ def run_tool4(validated_inputs: dict, repo_root: str) -> dict:
     all_couplings: list[Coupling] = []
 
     for fp in file_paths:
-        couplings, support, aliases = compute_coupling(
-            target_file=fp,
-            commits=commits,
-            alias_map=alias_map,
-            max_files=max_files,
-        )
+        if fp in valid_path_set:
+            couplings, support, aliases = compute_coupling(
+                target_file=fp,
+                commits=commits,
+                alias_map=alias_map,
+                max_files=max_files,
+            )
+        else:
+            couplings, support, aliases = [], 0, []
 
         # ── 6. Build CouplingTarget ─────────────────────────────────
         all_targets.append(

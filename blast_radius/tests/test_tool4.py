@@ -639,6 +639,36 @@ class TestRunTool4Integration:
         parsed = Tool4Result(**result)
         codes = [d.code for d in parsed.diagnostics]
         assert "target_not_in_history" in codes
+        assert all(c.target_file != "does_not_exist.py" for c in parsed.couplings)
+
+    def test_run_tool4_skips_invalid_target_for_coupling_compute(self, tmp_path, monkeypatch):
+        """Invalid target paths are reported but not passed to compute_coupling."""
+        _init_git_repo(tmp_path)
+
+        _write_file(tmp_path, "a.py", "# a")
+        _git_add_commit(tmp_path, "init")
+
+        called_targets: list[str] = []
+
+        def _fake_compute(target_file, commits, alias_map, max_files=20):
+            called_targets.append(target_file)
+            return [], 0, []
+
+        monkeypatch.setattr(
+            "blast_radius_mcp.tools.tool4_temporal_coupling.compute_coupling",
+            _fake_compute,
+        )
+
+        result = run_tool4(
+            {"file_paths": ["a.py", "missing.py"]},
+            str(tmp_path),
+        )
+
+        parsed = Tool4Result(**result)
+        assert called_targets == ["a.py"]
+        targets_by_file = {t.file: t for t in parsed.targets}
+        assert "missing.py" in targets_by_file
+        assert targets_by_file["missing.py"].support_commits == 0
 
     def test_run_tool4_renames_followed(self, tmp_path):
         """Renames are tracked in history_stats."""

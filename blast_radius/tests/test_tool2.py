@@ -715,6 +715,26 @@ class TestEntryPointResolution:
         )
         assert len(resolved) >= 1
 
+    def test_symbol_anchor_without_file_ambiguous_emits_alias_ambiguous(self, tmp_path):
+        _write_py(tmp_path, "a.py", """\
+            def handler(req):
+                return req.user_id
+        """)
+        _write_py(tmp_path, "b.py", """\
+            def handler(req):
+                return req.user_id
+        """)
+
+        resolved, diagnostics, _ = self._resolve(
+            tmp_path,
+            ["a.py", "b.py"],
+            ["symbol:handler"],
+        )
+
+        assert resolved == []
+        codes = [d.code for d in diagnostics]
+        assert "alias_ambiguous" in codes
+
     def test_unresolved_anchor_emits_diagnostic(self, tmp_path):
         _write_py(tmp_path, "app.py", """\
             def hello():
@@ -948,6 +968,50 @@ class TestRunTool2Integration:
         result_dict = run_tool2(req, str(tmp_path))
         result = Tool2Result(**result_dict)
         assert len(result.read_sites) >= 1
+
+    def test_interprocedural_prefers_same_file_duplicate_name(self, tmp_path):
+        _write_py(tmp_path, "a.py", """\
+            def helper(req):
+                return req.user_id
+
+            def handler(req):
+                return helper(req)
+        """)
+        _write_py(tmp_path, "b.py", """\
+            def helper(req):
+                return req.other
+        """)
+
+        req = Tool2Request(
+            field_path="Request.user_id",
+            entry_points=["symbol:a.py:handler"],
+        )
+        result = Tool2Result(**run_tool2(req, str(tmp_path)))
+
+        assert any(site.location.file == "a.py" for site in result.read_sites)
+        assert all(site.location.file != "b.py" for site in result.read_sites)
+
+    def test_interprocedural_ambiguous_duplicate_name_skips_expansion(self, tmp_path):
+        _write_py(tmp_path, "a.py", """\
+            def helper(req):
+                return req.user_id
+        """)
+        _write_py(tmp_path, "b.py", """\
+            def helper(req):
+                return req.user_id
+        """)
+        _write_py(tmp_path, "c.py", """\
+            def handler(req):
+                return helper(req)
+        """)
+
+        req = Tool2Request(
+            field_path="Request.user_id",
+            entry_points=["symbol:c.py:handler"],
+        )
+        result = Tool2Result(**run_tool2(req, str(tmp_path)))
+
+        assert result.read_sites == []
 
 
 # ═══════════════════════════════════════════════════════════════════════

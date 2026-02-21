@@ -661,3 +661,27 @@ class TestRunTool5Integration:
         # Should have a transitive_import reason
         all_reasons = [r.type for t in parsed.tests for r in t.reasons]
         assert "transitive_import" in all_reasons
+
+    def test_run_tool5_coverage_mode_optional_emits_coverage_unavailable(self, tmp_path):
+        _write_py(tmp_path, "app/core.py", "x = 1\n")
+        _write_py(tmp_path, "tests/test_core.py", "def test_x():\n    assert True\n")
+
+        request = {
+            "impacted_nodes": [{"file": "app/core.py"}],
+            "options": {"coverage_mode": "optional"},
+        }
+        parsed = Tool5Result(**run_tool5(request, str(tmp_path)))
+        diag_codes = [d.code for d in parsed.diagnostics]
+        assert "coverage_unavailable" in diag_codes
+
+    def test_run_tool5_coverage_mode_off_emits_no_coverage_unavailable(self, tmp_path):
+        _write_py(tmp_path, "app/core.py", "x = 1\n")
+        _write_py(tmp_path, "tests/test_core.py", "def test_x():\n    assert True\n")
+
+        request = {
+            "impacted_nodes": [{"file": "app/core.py"}],
+            "options": {"coverage_mode": "off"},
+        }
+        parsed = Tool5Result(**run_tool5(request, str(tmp_path)))
+        diag_codes = [d.code for d in parsed.diagnostics]
+        assert "coverage_unavailable" not in diag_codes

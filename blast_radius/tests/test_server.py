@@ -216,3 +216,123 @@ async def test_execute_tool_tool3_builder_handles_validated_model(isolated_cache
         "embedding_primary",
         "bm25_fallback",
     }
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_invalid_json_returns_error_envelope(isolated_cache):
+    response = json.loads(
+        await server.execute_tool(
+            "trace_data_shape",
+            "1.0.0",
+            "{not-json}",
+            _build_tool2_result,
+        )
+    )
+
+    assert response["run_id"] == "error"
+    assert response["query_id"] == "error"
+    assert response["repo_fingerprint"]["fingerprint_hash"] == "error"
+    assert response["cached"] is False
+    assert response["errors"]
+    assert response["errors"][0]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_unknown_tool_returns_validation_error(isolated_cache, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    request = _build_tool2_request(
+        repo_root=str(repo_root),
+        intent="unknown",
+        anchors=[],
+        diff="",
+    )
+
+    response = json.loads(
+        await server.execute_tool(
+            "not_a_real_tool",
+            "1.0.0",
+            request,
+            _build_tool2_result,
+        )
+    )
+
+    assert response["run_id"] == "error"
+    assert response["query_id"] == "error"
+    assert response["repo_fingerprint"]["fingerprint_hash"] == "error"
+    assert response["cached"] is False
+    assert response["errors"][0]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_invalid_inputs_returns_validation_error(isolated_cache, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    request = {
+        "schema_version": "v1",
+        "repo_root": str(repo_root),
+        "inputs": {
+            "entry_points": ["route:POST /orders"],
+        },
+        "anchors": [],
+        "diff": "",
+        "options": {"intent": "invalid inputs"},
+    }
+
+    response = json.loads(
+        await server.execute_tool(
+            "trace_data_shape",
+            "1.0.0",
+            request,
+            _build_tool2_result,
+        )
+    )
+
+    assert response["run_id"] == "error"
+    assert response["query_id"] == "error"
+    assert response["repo_fingerprint"]["fingerprint_hash"] == "error"
+    assert response["cached"] is False
+    assert response["errors"][0]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_builder_exception_returns_error_and_run_persisted(
+    isolated_cache,
+    tmp_path,
+):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    request = _build_tool2_request(
+        repo_root=str(repo_root),
+        intent="raise builder",
+        anchors=["route:POST /orders"],
+        diff="",
+    )
+
+    def _raising_builder(validated_inputs, repo_root: str) -> dict:
+        raise RuntimeError("builder exploded")
+
+    response = json.loads(
+        await server.execute_tool(
+            "trace_data_shape",
+            "1.0.0",
+            request,
+            _raising_builder,
+        )
+    )
+
+    assert response["run_id"] == "error"
+    assert response["query_id"] == "error"
+    assert response["repo_fingerprint"]["fingerprint_hash"] == "error"
+    assert response["cached"] is False
+    assert response["errors"][0]["code"] == "validation_error"
+
+    stats = server._get_cache().get_stats()
+    assert stats["runs"] == 1
+    assert stats["tool_results"] == 0

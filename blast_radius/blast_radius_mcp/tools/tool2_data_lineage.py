@@ -230,6 +230,14 @@ class FunctionEntry:
     node: ast.FunctionDef | ast.AsyncFunctionDef
 
 
+@dataclass
+class FunctionIndex:
+    """Function lookup index for inter-procedural tracing."""
+
+    by_qname: dict[str, FunctionEntry] = field(default_factory=dict)
+    by_name: dict[str, list[FunctionEntry]] = field(default_factory=dict)
+
+
 # ── File-path → module name ─────────────────────────────────────────
 
 
@@ -622,14 +630,9 @@ def build_model_index(
 def _build_function_index(
     target_files: list[str],
     trees: dict[str, ast.Module],
-) -> dict[str, FunctionEntry]:
-    """Build mapping ``function_name`` → :class:`FunctionEntry`
-    for call-graph expansion.
-
-    Keys are the simple function name.  When there are duplicates across files,
-    later entries overwrite earlier ones (best-effort).
-    """
-    index: dict[str, FunctionEntry] = {}
+) -> FunctionIndex:
+    """Build :class:`FunctionIndex` for call-graph expansion."""
+    index = FunctionIndex()
 
     for rel_path in target_files:
         tree = trees.get(rel_path)
@@ -642,7 +645,7 @@ def _build_function_index(
                 continue
             end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
             qname = f"{module_name}.{node.name}"
-            index[node.name] = FunctionEntry(
+            entry = FunctionEntry(
                 name=node.name,
                 qname=qname,
                 file=rel_path,
@@ -651,10 +654,44 @@ def _build_function_index(
                 col=node.col_offset,
                 node=node,
             )
-            # Also store by qualified name for precise lookup
-            index[qname] = index[node.name]
+            index.by_name.setdefault(node.name, []).append(entry)
+            if qname not in index.by_qname:
+                index.by_qname[qname] = entry
 
     return index
+
+
+def _resolve_callee_entry(
+    callee_name: str,
+    caller_file: str,
+    caller_qname: str,
+    func_index: FunctionIndex,
+) -> FunctionEntry | None:
+    """Resolve a callee to a concrete function entry, if unambiguous."""
+    direct = func_index.by_qname.get(callee_name)
+    if direct is not None:
+        return direct
+
+    short_name = callee_name.rsplit(".", 1)[-1]
+    candidates = func_index.by_name.get(short_name, [])
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    same_file = [c for c in candidates if c.file == caller_file]
+    if len(same_file) == 1:
+        return same_file[0]
+
+    caller_module = caller_qname.rsplit(".", 1)[0] if "." in caller_qname else ""
+    same_module = [
+        c for c in candidates
+        if c.qname.rsplit(".", 1)[0] == caller_module
+    ]
+    if len(same_module) == 1:
+        return same_module[0]
+
+    return None
 
 
 # ── Phase 5.3 — Field Read/Write Site Detection ─────────────────────
@@ -1066,7 +1103,7 @@ def trace_field(
     handler_line: int,
     source_lines: list[str],
     model_index: dict[str, PydanticModelEntry],
-    func_index: dict[str, FunctionEntry],
+    func_index: FunctionIndex,
     sources: dict[str, str],
     options: Tool2Options,
     current_depth: int = 0,
@@ -1132,12 +1169,12 @@ def trace_field(
     if current_depth < options.max_call_depth:
         callees = _find_callees_in_function(handler_func_node)
         for callee_name in callees:
-            # Look up callee in function index
-            func_entry = func_index.get(callee_name)
-            if func_entry is None:
-                # Try with the last component only
-                short_name = callee_name.rsplit(".", 1)[-1]
-                func_entry = func_index.get(short_name)
+            func_entry = _resolve_callee_entry(
+                callee_name=callee_name,
+                caller_file=handler_file,
+                caller_qname=handler_qname,
+                func_index=func_index,
+            )
             if func_entry is None:
                 continue
             if func_entry.qname in visited:
@@ -1176,7 +1213,7 @@ def trace_field(
 def _resolve_entry_points(
     entry_points: list[str],
     route_index: dict[str, RouteEntry],
-    func_index: dict[str, FunctionEntry],
+    func_index: FunctionIndex,
     sources: dict[str, str],
     trees: dict[str, ast.Module],
 ) -> tuple[list[EntryPointResolved], list[Tool2Diagnostic],
@@ -1271,34 +1308,47 @@ def _resolve_entry_points(
                                 found = True
                                 break
             else:
-                # Search across all files
-                for fpath, tree in sorted(trees.items()):
-                    source = sources.get(fpath)
-                    if not source:
-                        continue
-                    for node in ast.walk(tree):
-                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            if node.name == sym_name:
-                                module_name = _file_path_to_module(fpath)
-                                qname = f"{module_name}.{sym_name}"
-                                line = node.lineno
-                                end_line = getattr(node, "end_lineno", line) or line
-                                symbol_id = _compute_symbol_id(qname, fpath, line)
-                                location = _loc_from_lines(fpath, line, node.col_offset, end_line, 0)
-                                resolved.append(EntryPointResolved(
-                                    anchor=ep,
-                                    handler_symbol_id=symbol_id,
-                                    location=location,
-                                    confidence="medium",
-                                ))
-                                handler_tuples.append((
-                                    fpath, qname, node, sym_name, line,
-                                    source.splitlines(),
-                                ))
-                                found = True
-                                break
-                    if found:
-                        break
+                candidates = sorted(
+                    func_index.by_name.get(sym_name, []),
+                    key=lambda c: (c.file, c.line, c.col),
+                )
+                if len(candidates) == 1:
+                    candidate = candidates[0]
+                    source = sources.get(candidate.file)
+                    if source:
+                        symbol_id = _compute_symbol_id(candidate.qname, candidate.file, candidate.line)
+                        location = _loc_from_lines(
+                            candidate.file,
+                            candidate.line,
+                            candidate.col,
+                            candidate.end_line,
+                            0,
+                        )
+                        resolved.append(EntryPointResolved(
+                            anchor=ep,
+                            handler_symbol_id=symbol_id,
+                            location=location,
+                            confidence="medium",
+                        ))
+                        handler_tuples.append((
+                            candidate.file,
+                            candidate.qname,
+                            candidate.node,
+                            candidate.name,
+                            candidate.line,
+                            source.splitlines(),
+                        ))
+                        found = True
+                elif len(candidates) > 1:
+                    diagnostics.append(Tool2Diagnostic(
+                        severity="warning",
+                        code="alias_ambiguous",
+                        message=(
+                            f"Symbol '{sym_name}' is ambiguous across "
+                            f"{len(candidates)} files; specify 'symbol:file.py:{sym_name}'"
+                        ),
+                    ))
+                    continue
 
             if not found:
                 diagnostics.append(Tool2Diagnostic(

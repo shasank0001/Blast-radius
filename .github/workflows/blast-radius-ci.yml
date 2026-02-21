@@ -1,0 +1,38 @@
+name: blast-radius-ci
+
+on:
+  pull_request:
+    paths:
+      - "blast_radius/**"
+      - ".github/workflows/blast-radius-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "blast_radius/**"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blast_radius
+    env:
+      PYTHONHASHSEED: "0"
+      TZ: "UTC"
+      LANG: "C.UTF-8"
+      LC_ALL: "C.UTF-8"
+      BLAST_RADIUS_CACHE_DB_PATH: "${{ runner.temp }}/blast-radius-cache.db"
+      BLAST_RADIUS_OPENAI_API_KEY: ""
+      BLAST_RADIUS_PINECONE_API_KEY: ""
+      BLAST_RADIUS_PINECONE_HOST: ""
+      BLAST_RADIUS_PINECONE_INDEX: "blast-radius"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: blast_radius/pyproject.toml
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests --maxfail=1

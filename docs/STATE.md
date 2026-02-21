@@ -3,7 +3,7 @@
 > **Last Updated**: 2026-02-21  
 > **Repository**: https://github.com/shasank0001/Blast-radius.git  
 > **Branch**: `main`  
-> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 186 passing (0 failures)
+> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 186 passing (0 failures) + M4 smoke-tested
 
 ---
 
@@ -14,7 +14,7 @@
 | M1 | Project skeleton + MCP server boot + schemas + validation | ✅ Complete | `1368cc6` |
 | M2 | SQLite cache + repo fingerprinting + deterministic IDs | ✅ Complete | `3f4f937` |
 | M3 | Tool 1 — AST Structural Engine | ✅ Complete | `3aaf699` |
-| M4 | Orchestrator — merge/prune + report render | ⬜ Not started | — |
+| M4 | Orchestrator — merge/prune + report render | ✅ Complete | — |
 | M5 | Tool 2 — Data Lineage Engine | ⬜ Not started | — |
 | M6 | Tool 5 — Test Impact Analyzer | ⬜ Not started | — |
 | M7 | Tool 4 — Temporal Coupling + Tool 3 — Semantic Neighbors | ⬜ Not started | — |
@@ -58,11 +58,12 @@ blast_radius/
 │   │   └── tool5_test_impact.py             # ⬜ Stub
 │   └── indices/                            # ⬜ Stub — semantic index pending
 │       └── semantic_index.py
-├── orchestrator/                           # ⬜ Stub files — implementations pending
-│   ├── normalize.py
-│   ├── diff_parser.py
-│   ├── merge_evidence.py
-│   └── report_render.py
+├── orchestrator/                           # ✅ Full implementation (2,150 lines)
+│   ├── __init__.py                         # ✅ Main pipeline: run_blast_radius() (281 lines)
+│   ├── normalize.py                        # ✅ ChangeSpec normalization + tool planner (495 lines)
+│   ├── diff_parser.py                      # ✅ Unified diff parser (186 lines)
+│   ├── merge_evidence.py                   # ✅ Evidence merge, prune, risk assignment (775 lines)
+│   └── report_render.py                    # ✅ Markdown report renderer (413 lines)
 ├── scripts/
 │   └── run_mcp_server.py                   # Convenience entry point
 └── tests/
@@ -313,19 +314,120 @@ blast_radius/
 
 ---
 
-## Next Up: Milestone 4 — Orchestrator: Merge/Prune + Report Render
+## Milestone 4 Summary — Orchestrator: Merge/Prune + Report Render
+
+**Depends on**: M1 ✅, M2 ✅, M3 ✅  
+**Tests**: 186 passing (all prior tests pass, M4 smoke-tested end-to-end)
+
+### What was built
+
+**Phase 4.1 — ChangeSpec Normalization** (`orchestrator/normalize.py`, 495 lines)
+- `ChangeSpec` Pydantic model with `extra="forbid"`, 8 fields covering change class, entity kind, operation, field path, type changes
+- `normalize_intent(intent, anchors, diff) → ChangeSpec` — heuristic keyword extraction:
+  - Maps operation keywords: remove/delete → remove, rename → rename, add/new → add, type/change type → type_change, relax → relax, tighten → tighten, refactor/signature → refactor
+  - Maps entity kind: field/payload/request/response → field+api_change, validator → validator+behavior_change, route/endpoint → route
+  - Extracts entity_id from HTTP method patterns, dotted identifiers, anchors
+  - Derives field_path from context; falls back to diff content when anchors insufficient
+  - Defaults to `structural_change` / `function` / `refactor` when ambiguous
+
+**Phase 4.2 — Diff Parser** (`orchestrator/diff_parser.py`, 186 lines)
+- `DiffResult` Pydantic model with changed_files, added_lines, removed_lines, key_identifiers
+- `parse_unified_diff(diff) → DiffResult` — full git unified diff parser:
+  - Extracts file paths from `---`/`+++` headers (strips `a/`/`b/` prefixes)
+  - Parses `@@` hunk headers for line ranges
+  - Classifies added (+) and removed (-) lines with numbers
+  - Extracts identifiers: function names, class names, assignments, self.attributes, underscore patterns
+  - Handles edge cases: empty diff, `/dev/null`, binary markers, multi-file diffs
+
+**Phase 4.3 — Tool Call Planner** (`orchestrator/normalize.py`, integrated)
+- `build_tool_plan(change_spec, diff_result, anchors, repo_root) → list[dict]`
+  - Tool 1 (get_ast_dependencies): ALWAYS included (priority 1)
+  - Tool 2 (trace_data_shape): only for api_change with entry points (priority 2)
+  - Tool 3 (find_semantic_neighbors): ALWAYS included (priority 3)
+  - Tool 4 (get_historical_coupling): only if `.git/` exists (priority 4)
+  - Tool 5 (get_covering_tests): only if `tests/`/`test/` exists (priority 5)
+
+**Phase 4.4 — Evidence Merge & Pruning** (`orchestrator/merge_evidence.py`, 775 lines)
+- `ImpactCandidate` Pydantic model with file, symbol, kind, impact_risk, impact_surface, reason, evidence, confidence, suggested_action, corroborated
+- `merge_evidence(tool1_result, tool2_result, tool3_result, tool4_result, tool5_result, change_spec)`:
+  1. Builds candidates from Tool 1 edges (corroborated=True, direct structural)
+  2. Enriches with Tool 2 read-sites (breakage flags → impact_risk=breaking)
+  3. Adds Tool 4 coupled files as review suggestions
+  4. Adds Tool 3 neighbors as "unknown risk zones" (corroborated=False)
+  5. Maps Tool 5 tests to impacted candidates
+  6. Deduplicates by (file, symbol) with evidence merging
+- `prune_candidates(candidates, change_spec)`:
+  - Drops low-confidence structural-only edges not matching changed field
+  - Never promotes semantic-only neighbors without Tool 1/2 corroboration
+  - For API changes, removes items not touching changed field_path (unless strongly evidenced)
+  - Caps at 50 corroborated / 20 uncorroborated candidates
+  - Deterministic sort: (corroborated desc, confidence desc, file asc, symbol asc)
+- `assign_risk_surface(candidate, change_spec)` — refines risk and surface from evidence types
+
+**Phase 4.5 — Report Renderer** (`orchestrator/report_render.py`, 413 lines)
+- `render_report(intent, anchors, change_spec, impacts, tool_results, query_ids, assumptions, limitations) → str`
+- Renders 9-section Markdown report matching REPORT_TEMPLATE.md:
+  1. Executive summary with derived overall confidence and top 3 risks
+  2. Direct structural impacts table (corroborated=True candidates, 7 columns)
+  3. Data-shape impacts (Tool 2 read sites with breakage flags, transformations)
+  4. Unknown risk zones (uncorroborated candidates from Tool 3)
+  5. Implicit dependencies (Tool 4 temporal coupling with weights)
+  6. Tests to run (Tool 5 ranked tests with reasons)
+  7. Recommended engineer actions (grouped by action type)
+  8. Evidence appendix (all query_ids by tool)
+  9. Assumptions & limitations
+- Graceful handling: empty results → "No data available", missing tools → "Tool not executed"
+
+**Phase 4.6 — Orchestrator Main Pipeline** (`orchestrator/__init__.py`, 281 lines)
+- `run_blast_radius(intent, repo_root, anchors, diff, run_id) → str` — full async pipeline:
+  1. Normalizes intent → ChangeSpec
+  2. Parses diff → DiffResult (if provided)
+  3. Computes repo fingerprint
+  4. Derives deterministic run_id
+  5. Builds tool call plan
+  6. Executes each tool via `_call_tool()` (wraps server.execute_tool with error handling)
+  7. Merges evidence from all tool results
+  8. Prunes candidates
+  9. Builds assumptions and limitations lists
+  10. Renders and returns Markdown report
+- `_call_tool()` helper — builds ToolRequestEnvelope and delegates to execute_tool
+- `_TOOL_REGISTRY` maps tool names → impl versions + builder functions
+
+### Key Implementation Details
+- **2,150 lines** total new production code across 5 files
+- **18+ functions** across 5 modules
+- Fully deterministic: same inputs → identical report
+- Evidence-first: no impact claims without tool-backed evidence
+- Semantic-only results stay as "unknown risk zones" unless corroborated
+
+### Acceptance Criteria Met
+- ✅ UC1 "Remove user_id from POST /orders" → correct ChangeSpec (api_change, field, remove)
+- ✅ UC4 "Change signature of parse_user_id" → correct ChangeSpec (structural_change, function, refactor)
+- ✅ Diff parser extracts file paths, line numbers, identifiers correctly
+- ✅ Tool planner: API change → plans all 5 tools; structural change → skips Tool 2; no .git → skips Tool 4
+- ✅ Tool 1 edges → corroborated=True, direct impacts
+- ✅ Tool 3-only items → corroborated=False, "unknown risk zones"
+- ✅ Tool 2 breakage flags → impact_risk=breaking
+- ✅ API change pruning removes irrelevant structural edges
+- ✅ Report output matches REPORT_TEMPLATE.md structure
+- ✅ Every impact has: impact risk, impact surface, location, reason, evidence, confidence, suggested action
+- ✅ Empty tool results produce graceful "No data available" sections
+- ✅ Evidence appendix lists all query_ids
+- ✅ All 186 prior tests still passing
+
+---
+
+## Next Up: Milestone 5 — Tool 2: Data Lineage Engine
 
 **Depends on**: M1 ✅, M2 ✅, M3 ✅  
 
 Phases:
-1. **4.1** — ChangeSpec normalization
-2. **4.2** — Diff parser
-3. **4.3** — Tool call planner
-4. **4.4** — Evidence merge & pruning
-5. **4.5** — Report renderer (Markdown)
-6. **4.6** — Orchestrator main pipeline
+1. **5.1** — Route Index (FastAPI/Starlette)
+2. **5.2** — Pydantic Model Index
+3. **5.3** — Field Read/Write Site Detection
+4. **5.4** — Wire into Server + Output Assembly
 
-**Key files**: `orchestrator/normalize.py`, `orchestrator/diff_parser.py`, `orchestrator/merge_evidence.py`, `orchestrator/report_render.py` (all currently stubs)
+**Key files**: `blast_radius_mcp/tools/tool2_data_lineage.py` (currently stub)
 
 ---
 

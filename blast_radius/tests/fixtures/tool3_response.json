@@ -1,0 +1,38 @@
+{
+  "schema_version": "v1",
+  "tool_name": "find_semantic_neighbors",
+  "run_id": "abc123",
+  "query_id": "def456",
+  "repo_fingerprint": {
+    "git_head": "abc123def",
+    "dirty": false,
+    "fingerprint_hash": "fp_hash_123"
+  },
+  "cached": false,
+  "timing_ms": 200,
+  "result": {
+    "retrieval_mode": "bm25_fallback",
+    "neighbors": [
+      {
+        "neighbor_id": "nb_001",
+        "file": "app/utils/validators.py",
+        "symbol": "validate_user_id",
+        "span": {
+          "start": {"line": 10, "col": 0, "offset": -1},
+          "end": {"line": 20, "col": 0, "offset": -1}
+        },
+        "score": 0.72,
+        "method": "bm25",
+        "rationale_snippet": "def validate_user_id(user_id: str) -> bool:",
+        "uncorroborated": true
+      }
+    ],
+    "index_stats": {
+      "chunks_total": 100,
+      "chunks_scanned": 100,
+      "backend": "bm25"
+    },
+    "diagnostics": []
+  },
+  "errors": []
+}

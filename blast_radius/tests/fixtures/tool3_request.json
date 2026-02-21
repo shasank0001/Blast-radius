@@ -1,0 +1,19 @@
+{
+  "schema_version": "v1",
+  "repo_root": ".",
+  "inputs": {
+    "query_text": "Remove user_id from POST /orders payload",
+    "scope": {
+      "paths": ["app/"],
+      "globs": ["**/*.py"]
+    },
+    "options": {
+      "top_k": 25,
+      "min_score": 0.35,
+      "mode": "auto"
+    }
+  },
+  "anchors": [],
+  "diff": "",
+  "options": {}
+}

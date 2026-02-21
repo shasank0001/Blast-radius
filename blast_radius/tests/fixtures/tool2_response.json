@@ -1,0 +1,62 @@
+{
+  "schema_version": "v1",
+  "tool_name": "trace_data_shape",
+  "run_id": "abc123",
+  "query_id": "def456",
+  "repo_fingerprint": {
+    "git_head": "abc123def",
+    "dirty": false,
+    "fingerprint_hash": "fp_hash_123"
+  },
+  "cached": false,
+  "timing_ms": 80,
+  "result": {
+    "changed_field": "OrderRequest.user_id",
+    "entry_points_resolved": [
+      {
+        "anchor": "route:POST /orders",
+        "handler_symbol_id": "sym_handler_001",
+        "location": {
+          "file": "app/api/orders.py",
+          "range": {
+            "start": {"line": 21, "col": 0, "offset": -1},
+            "end": {"line": 43, "col": 0, "offset": -1}
+          }
+        },
+        "confidence": "high"
+      }
+    ],
+    "read_sites": [
+      {
+        "site_id": "site_001",
+        "field_path": "OrderRequest.user_id",
+        "location": {
+          "file": "app/services/order_service.py",
+          "range": {
+            "start": {"line": 15, "col": 8, "offset": -1},
+            "end": {"line": 15, "col": 26, "offset": -1}
+          }
+        },
+        "enclosing_symbol_id": "sym_process_order",
+        "access_pattern": "attribute",
+        "breakage": {
+          "if_removed": true,
+          "if_renamed": true,
+          "if_type_changed": null
+        },
+        "confidence": "high",
+        "evidence_snippet": "order.user_id"
+      }
+    ],
+    "write_sites": [],
+    "validations": [],
+    "transforms": [],
+    "diagnostics": [],
+    "stats": {
+      "files_scanned": 5,
+      "sites_emitted": 1,
+      "truncated": false
+    }
+  },
+  "errors": []
+}

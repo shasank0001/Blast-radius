@@ -1,0 +1,21 @@
+{
+  "schema_version": "v1",
+  "repo_root": ".",
+  "inputs": {
+    "target_files": ["app/main.py", "app/models.py"],
+    "options": {
+      "include_references": true,
+      "include_import_edges": true,
+      "include_call_edges": true,
+      "include_inheritance_edges": true,
+      "max_snippet_chars": 240,
+      "resolve_imports": true,
+      "resolve_calls": true,
+      "python_version": "3.11",
+      "parse_mode": "python_ast"
+    }
+  },
+  "anchors": ["symbol:app/main.py:create_order"],
+  "diff": "",
+  "options": {}
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "v1",
+  "repo_root": ".",
+  "inputs": {
+    "impacted_nodes": [
+      {
+        "file": "app/api/orders.py",
+        "symbol": "create_order",
+        "kind": "function"
+      }
+    ],
+    "options": {
+      "max_tests": 10,
+      "include_transitive": true,
+      "transitive_depth": 2,
+      "include_literal_field_matches": true,
+      "coverage_mode": "off"
+    }
+  },
+  "anchors": [],
+  "diff": "",
+  "options": {}
+}

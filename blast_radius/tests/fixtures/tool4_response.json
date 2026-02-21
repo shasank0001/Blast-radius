@@ -1,0 +1,44 @@
+{
+  "schema_version": "v1",
+  "tool_name": "get_historical_coupling",
+  "run_id": "abc123",
+  "query_id": "def456",
+  "repo_fingerprint": {
+    "git_head": "abc123def",
+    "dirty": false,
+    "fingerprint_hash": "fp_hash_123"
+  },
+  "cached": false,
+  "timing_ms": 300,
+  "result": {
+    "targets": [
+      {
+        "file": "app/api/orders.py",
+        "aliases": [],
+        "support_commits": 45
+      }
+    ],
+    "couplings": [
+      {
+        "target_file": "app/api/orders.py",
+        "coupled_file": "app/models.py",
+        "weight": 0.78,
+        "support": 35,
+        "example_commits": [
+          {
+            "sha": "abc123",
+            "date": "2025-01-15T10:30:00Z",
+            "message": "Add order validation"
+          }
+        ]
+      }
+    ],
+    "history_stats": {
+      "commits_scanned": 500,
+      "commits_used": 378,
+      "renames_followed": 2
+    },
+    "diagnostics": []
+  },
+  "errors": []
+}

@@ -1,0 +1,96 @@
+{
+  "schema_version": "v1",
+  "tool_name": "get_ast_dependencies",
+  "run_id": "abc123",
+  "query_id": "def456",
+  "repo_fingerprint": {
+    "git_head": "abc123def",
+    "dirty": false,
+    "fingerprint_hash": "fp_hash_123"
+  },
+  "cached": false,
+  "timing_ms": 150,
+  "result": {
+    "language": "python",
+    "repo_root": ".",
+    "files": [
+      {
+        "path": "app/main.py",
+        "sha256": "aabbccdd",
+        "size_bytes": 1024,
+        "parse_status": "ok",
+        "syntax_error": null
+      }
+    ],
+    "nodes": [
+      {
+        "id": "sym_0001",
+        "kind": "module",
+        "name": "main",
+        "qualified_name": "app.main",
+        "file": "app/main.py",
+        "range": {
+          "start": {"line": 1, "col": 0, "offset": 0},
+          "end": {"line": 50, "col": 0, "offset": 1024}
+        },
+        "signature": null,
+        "decorators": [],
+        "bases": [],
+        "docstring": null,
+        "exports": [],
+        "attributes": {
+          "is_async": false,
+          "is_generator": false,
+          "is_property": false
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge_0001",
+        "type": "imports",
+        "source": "sym_0001",
+        "target": "sym_0002",
+        "target_ref": {
+          "kind": "module",
+          "qualified_name": "app.models",
+          "file": "app/models.py",
+          "symbol_id": "sym_0002"
+        },
+        "range": {
+          "start": {"line": 3, "col": 0, "offset": 20},
+          "end": {"line": 3, "col": 25, "offset": 45}
+        },
+        "confidence": 0.95,
+        "resolution": {
+          "status": "resolved",
+          "strategy": "import_table",
+          "candidates": []
+        },
+        "snippet": "from app.models import OrderRequest",
+        "metadata": {
+          "import": {
+            "module": "app.models",
+            "name": "OrderRequest",
+            "alias": "",
+            "level": 0
+          },
+          "call": null,
+          "inheritance": null,
+          "reference": null
+        }
+      }
+    ],
+    "diagnostics": [],
+    "stats": {
+      "target_files": 2,
+      "parsed_ok": 2,
+      "parsed_error": 0,
+      "nodes": 1,
+      "edges": 1,
+      "duration_ms": 150,
+      "cache": {"hits": 0, "misses": 2}
+    }
+  },
+  "errors": []
+}

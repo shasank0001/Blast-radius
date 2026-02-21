@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "repo_root": ".",
+  "inputs": {
+    "file_paths": ["app/api/orders.py"],
+    "options": {
+      "max_files": 20,
+      "window_commits": 500,
+      "follow_renames": true,
+      "exclude_merges": true,
+      "max_commit_size": 200
+    }
+  },
+  "anchors": [],
+  "diff": "",
+  "options": {}
+}

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blast-radius-mcp"
+version = "0.1.0"
+description = "Blast Radius MCP Server - Change impact analysis for Python repositories"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "xxhash",
+    "tree-sitter",
+    "tree-sitter-python",
+    "rank-bm25",
+    "openai",
+    "pinecone-client",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[project.scripts]
+blast-radius-mcp = "blast_radius_mcp.server:main"

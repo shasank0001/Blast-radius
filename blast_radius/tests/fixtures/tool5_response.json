@@ -1,0 +1,43 @@
+{
+  "schema_version": "v1",
+  "tool_name": "get_covering_tests",
+  "run_id": "abc123",
+  "query_id": "def456",
+  "repo_fingerprint": {
+    "git_head": "abc123def",
+    "dirty": false,
+    "fingerprint_hash": "fp_hash_123"
+  },
+  "cached": false,
+  "timing_ms": 120,
+  "result": {
+    "tests": [
+      {
+        "test_id": "test_001",
+        "nodeid": "tests/test_orders.py::test_create_order",
+        "file": "tests/test_orders.py",
+        "score": 0.95,
+        "rank": 1,
+        "confidence": "high",
+        "reasons": [
+          {
+            "type": "direct_import",
+            "evidence": "imports app.api.orders"
+          },
+          {
+            "type": "symbol_reference",
+            "evidence": "references create_order"
+          }
+        ]
+      }
+    ],
+    "unmatched_impacts": [],
+    "selection_stats": {
+      "tests_considered": 25,
+      "tests_selected": 1,
+      "high_confidence": 1
+    },
+    "diagnostics": []
+  },
+  "errors": []
+}

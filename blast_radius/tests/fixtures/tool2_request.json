@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "repo_root": ".",
+  "inputs": {
+    "field_path": "OrderRequest.user_id",
+    "entry_points": ["route:POST /orders"],
+    "options": {
+      "direction": "both",
+      "max_call_depth": 2,
+      "max_sites": 200,
+      "include_writes": true
+    }
+  },
+  "anchors": ["route:POST /orders"],
+  "diff": "",
+  "options": {}
+}

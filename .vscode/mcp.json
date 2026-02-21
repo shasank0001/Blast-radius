@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "blastRadius": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/blast_radius/.venv/bin/blast-radius-mcp",
+      "envFile": "${workspaceFolder}/blast_radius/.env",
+      "env": {
+        "BLAST_RADIUS_REPO_ROOT": "${workspaceFolder}",
+        "BLAST_RADIUS_CACHE_DB_PATH": "${workspaceFolder}/.cache/blast-radius/cache.db",
+        "BLAST_RADIUS_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}

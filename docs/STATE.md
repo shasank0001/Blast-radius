@@ -3,7 +3,7 @@
 > **Last Updated**: 2026-02-21  
 > **Repository**: https://github.com/shasank0001/Blast-radius.git  
 > **Branch**: `main`  
-> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 330 passing (0 failures)
+> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 406 passing (0 failures)
 
 ---
 
@@ -17,7 +17,7 @@
 | M4 | Orchestrator — merge/prune + report render | ✅ Complete | — |
 | M5 | Tool 2 — Data Lineage Engine | ✅ Complete | — |
 | M6 | Tool 5 — Test Impact Analyzer | ✅ Complete | — |
-| M7 | Tool 4 — Temporal Coupling + Tool 3 — Semantic Neighbors | ⬜ Not started | — |
+| M7 | Tool 4 — Temporal Coupling + Tool 3 — Semantic Neighbors | ✅ Complete | — |
 | M8 | End-to-end integration, demo hardening, polish | ⬜ Not started | — |
 
 ---
@@ -53,11 +53,11 @@ blast_radius/
 │   ├── tools/
 │   │   ├── tool1_ast_engine.py              # ✅ Full AST engine (980 lines)
 │   │   ├── tool2_data_lineage.py            # ✅ Full Data Lineage Engine (1,580 lines)
-│   │   ├── tool3_semantic_neighbors.py      # ⬜ Stub
-│   │   ├── tool4_temporal_coupling.py       # ⬜ Stub
+│   │   ├── tool3_semantic_neighbors.py      # ✅ Full Semantic Neighbor Search (457 lines)
+│   │   ├── tool4_temporal_coupling.py       # ✅ Full Temporal Coupling Engine (706 lines)
 │   │   ├── tool5_test_impact.py             # ✅ Full Test Impact Analyzer (845 lines)
-│   └── indices/                            # ⬜ Stub — semantic index pending
-│       └── semantic_index.py
+│   └── indices/                            # ✅ Semantic index (BM25 + OpenAI/Pinecone)
+│       └── semantic_index.py               # ✅ Full Semantic Index Layer (449 lines)
 ├── orchestrator/                           # ✅ Full implementation (2,150 lines)
 │   ├── __init__.py                         # ✅ Main pipeline: run_blast_radius() (281 lines)
 │   ├── normalize.py                        # ✅ ChangeSpec normalization + tool planner (495 lines)
@@ -599,11 +599,138 @@ blast_radius/
 
 ---
 
-## Next Up: Milestone 7 — Tool 4: Temporal Coupling + Tool 3: Semantic Neighbors
+## Milestone 7 Summary — Tool 4: Temporal Coupling + Tool 3: Semantic Neighbors
 
 **Depends on**: M1 ✅, M2 ✅  
+**Tests**: 406 passing (330 prior + 34 Tool 4 + 37 Tool 3 + 5 additional parametrized)  
 
-**Key files**: `blast_radius_mcp/tools/tool4_temporal_coupling.py` (currently stub), `blast_radius_mcp/tools/tool3_semantic_neighbors.py` (currently stub)
+### What was built
+
+**Phase 7.1 — Tool 4: Git History Parsing** (`tool4_temporal_coupling.py`, 706 lines)
+- `parse_git_log(repo_root, window_commits, exclude_merges, max_commit_size, follow_renames)` — full git log parser:
+  - Runs `git log --name-status -M --format="%H|%aI|%s"` via `subprocess` with fixed argument lists (no shell interpolation)
+  - Adds `--no-merges` flag when `exclude_merges=True`
+  - Parses output: extracts commit SHA, date (RFC3339), message, and file status lines (A/M/D/R)
+  - `FileChange` dataclass stores: `status`, `path`, `old_path` (for renames)
+  - `Commit` dataclass stores: `sha`, `date`, `message`, `files[]`
+  - Filters: drops commits touching more than `max_commit_size` files
+  - Rename handling: parses `R100\told.py\tnew.py` → tracks both old and new paths
+  - Security: no shell=True, all arguments passed as list
+
+**Phase 7.2 — Tool 4: Co-change Scoring** (`tool4_temporal_coupling.py`)
+- `build_rename_map(commits, follow_renames)` → `dict[str, set[str]]` alias map:
+  - Tracks rename chains (A→B→C: all three are aliases of each other)
+  - Bidirectional: both old and new paths point to full alias set
+  - Returns empty map when `follow_renames=False`
+- `compute_coupling(target_files, commits, alias_map, options)` → `(list[CouplingTarget], list[Coupling])`:
+  - For each target file, finds all commits containing it (including aliases)
+  - Computes co-change weight: `weighted_score / target_change_count`
+  - Commit-size normalization: each co-occurrence weighted by `1.0 / sqrt(commit_file_count)` to reduce noise from bulk commits
+  - Deterministic ranking: `(weight desc, support desc, coupled_file asc)`
+  - Weight rounded to 4 decimal places for determinism
+  - Top `max_files` coupled files returned per target
+  - Up to 3 example commits per coupling relationship
+  - Excludes self-coupling and target aliases from coupled files
+
+**Phase 7.3 — Tool 4: Wire into Server** (`tool4_temporal_coupling.py` + `server.py`)
+- `run_tool4(validated_inputs, repo_root)` → dict — full pipeline:
+  1. Validates file_paths against repo_root
+  2. Checks for `.git` directory — if missing, returns empty result with `git_history_unavailable` diagnostic
+  3. Parses git log with configured options
+  4. Builds rename alias map
+  5. Computes coupling scores for each target file
+  6. Builds `CouplingTarget` objects with aliases and support_commits
+  7. Emits diagnostics: `low_history_support` (< 10 commits used), `target_not_in_history` (no commits for target)
+  8. Returns `Tool4Result.model_dump(by_alias=True)`
+- Server `_build_tool4_result()` now delegates to `run_tool4()` (replaces stub)
+- `TOOL4_IMPL_VERSION = "1.0.0"`
+
+**Phase 7.4 — Tool 3: BM25 Fallback** (`indices/semantic_index.py`, 449 lines)
+- `_tokenize(text)` — extracts lowercase identifier tokens, filters stopwords and single-char tokens
+- `CodeChunk` dataclass with fields: `chunk_id`, `file`, `symbol`, `source`, `start_line`, `end_line`, `start_col`, `end_col`, `tokens`
+- `chunk_code_files(repo_root, scope_paths, scope_globs)` → `list[CodeChunk]`:
+  - Globs Python files within scope (or all .py files if no scope)
+  - Parses each with `ast`, extracts function/method definitions
+  - Handles nested classes and methods
+  - Chunk ID: `chunk_` + 16 hex chars from `sha256(file + ":" + qualified_name + ":" + start_line)`
+  - Scope resolution: matches against `scope.paths` prefixes and `scope.globs` patterns
+- `build_bm25_index(chunks)` → `BM25Okapi` instance from `rank_bm25`
+- `query_bm25(query_text, bm25_index, chunks, top_k, min_score)` → `list[tuple[CodeChunk, float]]`:
+  - Tokenizes query same way as chunks
+  - Gets BM25 scores, normalizes to 0..1 range (divide by max score)
+  - Filters by `min_score`, returns top `top_k` sorted by score desc
+
+**Phase 7.5 — Tool 3: OpenAI + Pinecone Primary Path** (`indices/semantic_index.py`)
+- `OpenAIEmbeddingProvider` class:
+  - Lazy initialization of OpenAI client
+  - `embed(texts)` → `list[list[float]]` using configured embedding model
+  - Handles import errors and API failures gracefully
+- `PineconeVectorStore` class:
+  - Lazy initialization of Pinecone index
+  - `upsert(ids, vectors, metadata_list)` — batch upsert (100 vectors per batch)
+  - `query(vector, top_k, filter_dict)` → list of matches with metadata
+
+**Phase 7.6 — Tool 3: Wire into Server** (`tool3_semantic_neighbors.py`, 457 lines + `server.py`)
+- `run_tool3(validated_inputs, repo_root)` → dict — full pipeline:
+  1. Extracts query_text, scope, options from inputs
+  2. Determines retrieval mode: `auto` (embedding → BM25 fallback), `embedding` (only), `bm25` (only)
+  3. **Embedding path**: checks API keys → chunks code → embeds query → queries Pinecone → maps to Neighbors
+  4. **BM25 path**: chunks code → builds BM25 index → queries → maps to Neighbors
+  5. Deduplicates neighbors by `(file, symbol)` — keeps highest score
+  6. Stable sort: `(score desc, file asc, span.start.line asc, span.start.col asc)`
+  7. All results marked `uncorroborated=True`
+  8. Builds `IndexStats` with chunks_total, chunks_scanned, backend
+  9. Returns `Tool3Result.model_dump(by_alias=True)`
+- Comprehensive diagnostics:
+  - `semantic_provider_unavailable`: API keys missing or provider error (auto-falls back to BM25)
+  - `semantic_index_empty`: no Python files match scope
+  - `threshold_filtered_all`: all scores below `min_score`
+- Server `_build_tool3_result()` now delegates to `run_tool3()` (replaces stub)
+- `TOOL3_IMPL_VERSION = "1.0.0"`
+
+### Key Implementation Details
+- **1,612 lines** of new production code (706 Tool 4 + 457 Tool 3 + 449 semantic index)
+- **34 functions/classes** across 3 new modules
+- Tool 4 uses `subprocess` for git access — no shell injection, fixed argument lists
+- Tool 3 uses `rank_bm25` for BM25 fallback — zero external API dependency for basic operation
+- Tool 3 primary path uses `openai` + `pinecone-client` — automatic fallback when keys missing
+- All outputs are deterministic — identical inputs produce identical results
+- Never raises exceptions to caller — all errors surfaced as diagnostics
+
+### Acceptance Criteria Met
+**Tool 4:**
+- ✅ Returns ranked coupled files for known changed files
+- ✅ Evidence commits include sha, date, message (up to 3 per coupling)
+- ✅ Commit-size normalization reduces noise from bulk commits
+- ✅ Deterministic rounding (4 decimal places) and ordering
+- ✅ Handles rename scenarios via alias tracking
+- ✅ Graceful degradation without `.git` → `git_history_unavailable` diagnostic
+- ✅ `low_history_support` diagnostic when < 10 commits
+- ✅ `target_not_in_history` diagnostic for unknown targets
+- ✅ Filters large commits by `max_commit_size`
+- ✅ `--no-merges` flag when `exclude_merges=True`
+
+**Tool 3:**
+- ✅ Produces semantically related neighbors with score + snippet
+- ✅ BM25 fallback works without any external API keys
+- ✅ Automatic degradation to BM25 without crashing
+- ✅ Every item explicitly `uncorroborated=True`
+- ✅ Deterministic tie-break: `(score desc, file asc, span.start.line asc)`
+- ✅ `semantic_provider_unavailable` diagnostic on provider failure
+- ✅ `semantic_index_empty` diagnostic when no Python files match scope
+- ✅ `threshold_filtered_all` diagnostic when all scores below min_score
+- ✅ Scope filtering via paths and globs
+- ✅ Deduplication by (file, symbol)
+- ✅ Server wired: both `find_semantic_neighbors` and `get_historical_coupling` return fully populated results
+- ✅ `pytest tests/` — 406 tests passing
+
+---
+
+## Next Up: Milestone 8 — End-to-End Integration, Demo Hardening, Polish
+
+**Depends on**: M1–M7 ✅  
+
+**Key tasks**: Wire all 5 real tool implementations in orchestrator, parallel tool execution, CLI entry point, demo scenario, determinism guarantees, documentation
 
 ---
 
@@ -617,6 +744,8 @@ blast_radius/
 | `test_cache.py` | 21 | CacheDB CRUD, stats, cleanup (age + size cap), build_cache_key |
 | `test_tool1_ast.py` | 65 | AST engine: nodes, edges, cross-file, determinism, parse-mode fallback, integration |
 | `test_tool2.py` | 94 | Data lineage: IDs, routes, models, field tracing, entry points, integration, determinism |
+| `test_tool3.py` | 37 | Semantic neighbors: tokenization, chunking, BM25 search, integration, diagnostics |
+| `test_tool4.py` | 34 | Temporal coupling: helpers, git parsing, rename maps, coupling scoring, integration |
 | `test_tool5.py` | 50 | Test impact: helpers, discovery, index, module graph, scoring, integration |
 | `test_server.py` | 2 | execute_tool deterministic `run_id` persistence + cache-hit behavior |
-| **Total** | **330** | **All passing** |
+| **Total** | **406** | **All passing** |

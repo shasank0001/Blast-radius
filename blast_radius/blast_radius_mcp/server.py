@@ -32,6 +32,8 @@ from blast_radius_mcp.schemas.tool1_ast import (
 )
 from blast_radius_mcp.tools.tool1_ast_engine import run_tool1
 from blast_radius_mcp.tools.tool2_data_lineage import run_tool2
+from blast_radius_mcp.tools.tool3_semantic_neighbors import run_tool3
+from blast_radius_mcp.tools.tool4_temporal_coupling import run_tool4
 from blast_radius_mcp.tools.tool5_test_impact import run_tool5
 from blast_radius_mcp.schemas.tool2_lineage import Tool2Result, Tool2Stats
 from blast_radius_mcp.schemas.tool3_semantic import (
@@ -247,27 +249,13 @@ def _build_tool2_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]
 
 
 def _build_tool3_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
-    """Build Tool 3 stub result."""
-    result = Tool3Result(
-        retrieval_mode="bm25_fallback",
-        neighbors=[],
-        index_stats=IndexStats(chunks_total=0, chunks_scanned=0, backend="bm25"),
-        diagnostics=[],
-    )
-    return json.loads(result.model_dump_json(by_alias=True))
+    """Build Tool 3 result using the Semantic Neighbor Search engine."""
+    return run_tool3(validated_inputs, repo_root)
 
 
 def _build_tool4_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
-    """Build Tool 4 stub result."""
-    result = Tool4Result(
-        targets=[],
-        couplings=[],
-        history_stats=HistoryStats(
-            commits_scanned=0, commits_used=0, renames_followed=0
-        ),
-        diagnostics=[],
-    )
-    return json.loads(result.model_dump_json(by_alias=True))
+    """Build Tool 4 result using the Temporal Coupling engine."""
+    return run_tool4(validated_inputs, repo_root)
 
 
 def _build_tool5_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:

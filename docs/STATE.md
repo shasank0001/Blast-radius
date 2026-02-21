@@ -3,7 +3,7 @@
 > **Last Updated**: 2026-02-21  
 > **Repository**: https://github.com/shasank0001/Blast-radius.git  
 > **Branch**: `main`  
-> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 280 passing (0 failures)
+> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 330 passing (0 failures)
 
 ---
 
@@ -16,7 +16,7 @@
 | M3 | Tool 1 — AST Structural Engine | ✅ Complete | `3aaf699` |
 | M4 | Orchestrator — merge/prune + report render | ✅ Complete | — |
 | M5 | Tool 2 — Data Lineage Engine | ✅ Complete | — |
-| M6 | Tool 5 — Test Impact Analyzer | ⬜ Not started | — |
+| M6 | Tool 5 — Test Impact Analyzer | ✅ Complete | — |
 | M7 | Tool 4 — Temporal Coupling + Tool 3 — Semantic Neighbors | ⬜ Not started | — |
 | M8 | End-to-end integration, demo hardening, polish | ⬜ Not started | — |
 
@@ -55,7 +55,7 @@ blast_radius/
 │   │   ├── tool2_data_lineage.py            # ✅ Full Data Lineage Engine (1,580 lines)
 │   │   ├── tool3_semantic_neighbors.py      # ⬜ Stub
 │   │   ├── tool4_temporal_coupling.py       # ⬜ Stub
-│   │   └── tool5_test_impact.py             # ⬜ Stub
+│   │   ├── tool5_test_impact.py             # ✅ Full Test Impact Analyzer (845 lines)
 │   └── indices/                            # ⬜ Stub — semantic index pending
 │       └── semantic_index.py
 ├── orchestrator/                           # ✅ Full implementation (2,150 lines)
@@ -512,11 +512,98 @@ blast_radius/
 
 ---
 
-## Next Up: Milestone 6 — Tool 5: Test Impact Analyzer
+## Milestone 6 Summary — Tool 5: Test Impact Analyzer
 
 **Depends on**: M1 ✅, M2 ✅, M3 ✅  
+**Tests**: 330 passing (280 prior + 50 new)  
 
-**Key files**: `blast_radius_mcp/tools/tool5_test_impact.py` (currently stub)
+### What was built
+
+**Phase 6.1 — Test Discovery** (`tool5_test_impact.py`)
+- `discover_tests(repo_root)` → `(test_files, diagnostics)` — multi-strategy test file discovery:
+  - Checks `pytest.ini` for `testpaths` via `configparser`
+  - Checks `pyproject.toml [tool.pytest.ini_options]` via `tomllib` (Python 3.11+)
+  - Checks `setup.cfg [tool:pytest]` for `testpaths`
+  - Falls back to conventional directories (`tests/`, `test/`)
+  - Last resort: scans all Python files for `test_*.py` / `*_test.py` naming
+  - Returns `tests_not_found` diagnostic when no test files discovered
+- Helper functions: `_parse_testpaths_from_pyproject()`, `_parse_testpaths_from_pytest_ini()`, `_parse_testpaths_from_setup_cfg()`, `_collect_test_files_from_dirs()`
+
+**Phase 6.2 — Test Import/Reference Index** (`tool5_test_impact.py`)
+- `build_test_index(repo_root, test_files)` → per-file index of imports, nodeids, and references
+- `_parse_test_file()` — AST-parses a single test file, extracts:
+  - **Imports**: `_ImportVisitor` collects `imported_modules` (dotted names) and `imported_symbols` (module, name) tuples from `import X` and `from X import Y`
+  - **Test nodeids**: `_TestNodeidVisitor` finds `test_*` functions (sync and async) and `test_*` methods in classes, outputs pytest-style nodeids (`file::func`, `file::Class::method`)
+  - **References**: `_ReferenceVisitor` collects `ast.Name` identifiers, `ast.Attribute` names, and string literal constants for lightweight matching
+- Graceful error handling: syntax errors and missing files produce diagnostics, don't crash
+- `build_module_graph(repo_root)` — directed module-import graph for all Python files
+- `get_transitive_imports(module, graph, max_depth)` — BFS traversal returning `{module: depth}` for reachable modules
+
+**Phase 6.3 — Scoring & Ranking** (`tool5_test_impact.py`)
+- `score_tests(impacted_nodes, test_index, module_graph, options)` → `(tests, unmatched)`
+- `_score_single_test()` — scores one test nodeid against all impacted nodes with weighted reasons:
+  - `direct_import` (test imports impacted module): weight = 1.0
+  - `from_import_symbol` (test imports specific symbol from impacted module): weight = 1.0
+  - `transitive_import` (test imports module that transitively imports impacted module): weight = 0.5 / depth
+  - `symbol_reference` (test references impacted symbol as `ast.Name`): weight = 0.4
+  - `field_literal_match` (test contains string literal matching field name, kind=field): weight = 0.2
+- Score capped at 1.0 across all reasons
+- Deterministic ranking: sort by `(score desc, file asc, nodeid asc)`, assign contiguous ranks from 1
+- Confidence assignment: `>= 0.7` → high, `>= 0.4` → medium, `< 0.4` → low
+- `max_tests` trimming with `selection_truncated` diagnostic
+- Unmatched impacts: impacted nodes with no test scoring > 0
+
+**Phase 6.4 — Wire into Server + Main Pipeline** (`tool5_test_impact.py` + `server.py`)
+- `run_tool5(request, repo_root)` — full orchestration pipeline:
+  1. Discover test files in repo
+  2. Build per-test import/reference index
+  3. Build module-level import graph (if `include_transitive=True`)
+  4. Score and rank all test nodeids against impacted nodes
+  5. Apply `max_tests` trimming, compute `SelectionStats`
+  6. Collect diagnostics (tests_not_found, test_parse_error, selection_truncated)
+  7. Return `Tool5Result.model_dump(by_alias=True)`
+- Server `_build_tool5_result()` now delegates to `run_tool5()` (replaces stub)
+- Full query caching via the SQLite layer (cache hit returns `cached=True`)
+- `TOOL5_IMPL_VERSION = "1.0.0"`
+
+### Deterministic ID Generation
+- `_sha256_prefix(prefix, *parts, length=16)` — SHA-256 of concatenated parts, truncated to prefix + 16 hex chars
+- `_compute_test_id(nodeid, file)` → `test_` + 16 hex chars — deterministic per test
+- `_file_path_to_module(file_path)` — converts `foo/bar.py` → `foo.bar`, `__init__.py` → parent module
+
+### Key Implementation Details
+- **845 lines** of production code in `tool5_test_impact.py`
+- **20+ functions** — 6 public API + 14 internal helpers + 4 AST visitor classes + 1 dataclass
+- Uses Python stdlib `ast` module for static analysis
+- Uses `tomllib` (Python 3.11+) for pyproject.toml parsing
+- Uses `configparser` for pytest.ini and setup.cfg parsing
+- Entirely static analysis — no test execution or coverage data required (`coverage_mode="off"`)
+- Two identical runs produce identical output (deterministic sort + content-derived IDs)
+
+### Acceptance Criteria Met
+- ✅ Produces ranked tests for impacted modules/symbols
+- ✅ Limits output to ≤ configured max (default 10)
+- ✅ Provides evidence reasons per selected test (typed: direct_import, from_import_symbol, transitive_import, symbol_reference, field_literal_match)
+- ✅ Deterministic order for identical input
+- ✅ Test discovery from pytest.ini, pyproject.toml, setup.cfg, conventional dirs, fallback
+- ✅ `tests_not_found` diagnostic when no tests discovered
+- ✅ Parse failures in test files produce diagnostics, continue with remaining files
+- ✅ Unmatched impacts listed explicitly in `unmatched_impacts[]`
+- ✅ Confidence levels assigned correctly (high/medium/low)
+- ✅ Transitive import detection via module graph BFS
+- ✅ Field literal matching for kind=field impacted nodes
+- ✅ Score capped at 1.0
+- ✅ selection_truncated diagnostic when results trimmed
+- ✅ Server wired: `get_covering_tests` returns fully populated Tool5Result
+- ✅ `pytest tests/` — 330 tests passing
+
+---
+
+## Next Up: Milestone 7 — Tool 4: Temporal Coupling + Tool 3: Semantic Neighbors
+
+**Depends on**: M1 ✅, M2 ✅  
+
+**Key files**: `blast_radius_mcp/tools/tool4_temporal_coupling.py` (currently stub), `blast_radius_mcp/tools/tool3_semantic_neighbors.py` (currently stub)
 
 ---
 
@@ -530,5 +617,6 @@ blast_radius/
 | `test_cache.py` | 21 | CacheDB CRUD, stats, cleanup (age + size cap), build_cache_key |
 | `test_tool1_ast.py` | 65 | AST engine: nodes, edges, cross-file, determinism, parse-mode fallback, integration |
 | `test_tool2.py` | 94 | Data lineage: IDs, routes, models, field tracing, entry points, integration, determinism |
+| `test_tool5.py` | 50 | Test impact: helpers, discovery, index, module graph, scoring, integration |
 | `test_server.py` | 2 | execute_tool deterministic `run_id` persistence + cache-hit behavior |
-| **Total** | **280** | **All passing** |
+| **Total** | **330** | **All passing** |

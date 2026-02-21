@@ -32,6 +32,7 @@ from blast_radius_mcp.schemas.tool1_ast import (
 )
 from blast_radius_mcp.tools.tool1_ast_engine import run_tool1
 from blast_radius_mcp.tools.tool2_data_lineage import run_tool2
+from blast_radius_mcp.tools.tool5_test_impact import run_tool5
 from blast_radius_mcp.schemas.tool2_lineage import Tool2Result, Tool2Stats
 from blast_radius_mcp.schemas.tool3_semantic import (
     IndexStats,
@@ -270,16 +271,8 @@ def _build_tool4_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]
 
 
 def _build_tool5_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
-    """Build Tool 5 stub result."""
-    result = Tool5Result(
-        tests=[],
-        unmatched_impacts=[],
-        selection_stats=SelectionStats(
-            tests_considered=0, tests_selected=0, high_confidence=0
-        ),
-        diagnostics=[],
-    )
-    return json.loads(result.model_dump_json(by_alias=True))
+    """Build Tool 5 result using the Test Impact Analyzer."""
+    return run_tool5(validated_inputs, repo_root)
 
 
 # ── Tool 1: AST Structural Engine ───────────────────────────────────

@@ -31,6 +31,7 @@ from blast_radius_mcp.schemas.tool1_ast import (
     Tool1Stats,
 )
 from blast_radius_mcp.tools.tool1_ast_engine import run_tool1
+from blast_radius_mcp.tools.tool2_data_lineage import run_tool2
 from blast_radius_mcp.schemas.tool2_lineage import Tool2Result, Tool2Stats
 from blast_radius_mcp.schemas.tool3_semantic import (
     IndexStats,
@@ -240,18 +241,8 @@ def _build_tool1_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]
 
 
 def _build_tool2_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
-    """Build Tool 2 stub result."""
-    result = Tool2Result(
-        changed_field=validated_inputs.field_path,
-        entry_points_resolved=[],
-        read_sites=[],
-        write_sites=[],
-        validations=[],
-        transforms=[],
-        diagnostics=[],
-        stats=Tool2Stats(files_scanned=0, sites_emitted=0, truncated=False),
-    )
-    return json.loads(result.model_dump_json(by_alias=True))
+    """Build Tool 2 result using the Data Lineage Engine."""
+    return run_tool2(validated_inputs, repo_root)
 
 
 def _build_tool3_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:

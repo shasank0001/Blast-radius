@@ -3,7 +3,7 @@
 > **Last Updated**: 2026-02-21  
 > **Repository**: https://github.com/shasank0001/Blast-radius.git  
 > **Branch**: `main`  
-> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 186 passing (0 failures) + M4 smoke-tested
+> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 280 passing (0 failures)
 
 ---
 
@@ -15,7 +15,7 @@
 | M2 | SQLite cache + repo fingerprinting + deterministic IDs | ✅ Complete | `3f4f937` |
 | M3 | Tool 1 — AST Structural Engine | ✅ Complete | `3aaf699` |
 | M4 | Orchestrator — merge/prune + report render | ✅ Complete | — |
-| M5 | Tool 2 — Data Lineage Engine | ⬜ Not started | — |
+| M5 | Tool 2 — Data Lineage Engine | ✅ Complete | — |
 | M6 | Tool 5 — Test Impact Analyzer | ⬜ Not started | — |
 | M7 | Tool 4 — Temporal Coupling + Tool 3 — Semantic Neighbors | ⬜ Not started | — |
 | M8 | End-to-end integration, demo hardening, polish | ⬜ Not started | — |
@@ -52,7 +52,7 @@ blast_radius/
 │   │   └── fingerprint.py                  # Repo fingerprinting (git HEAD, dirty, content hash)
 │   ├── tools/
 │   │   ├── tool1_ast_engine.py              # ✅ Full AST engine (980 lines)
-│   │   ├── tool2_data_lineage.py            # ⬜ Stub
+│   │   ├── tool2_data_lineage.py            # ✅ Full Data Lineage Engine (1,580 lines)
 │   │   ├── tool3_semantic_neighbors.py      # ⬜ Stub
 │   │   ├── tool4_temporal_coupling.py       # ⬜ Stub
 │   │   └── tool5_test_impact.py             # ⬜ Stub
@@ -73,6 +73,7 @@ blast_radius/
     ├── test_fingerprint.py                 # 16 tests — repo I/O and fingerprinting
     ├── test_cache.py                       # 21 tests — SQLite cache + cache keys
     ├── test_tool1_ast.py                   # 65 tests — AST engine unit + integration
+    ├── test_tool2.py                       # 94 tests — Data lineage: IDs, routes, models, tracing, integration
     ├── test_server.py                      # 2 tests — execute_tool deterministic run/cache behavior
     └── fixtures/
         ├── tool1_request.json
@@ -417,17 +418,105 @@ blast_radius/
 
 ---
 
-## Next Up: Milestone 5 — Tool 2: Data Lineage Engine
+## Milestone 5 Summary — Tool 2: Data Lineage Engine
+
+**Depends on**: M1 ✅, M2 ✅, M3 ✅  
+**Tests**: 280 passing (186 prior + 94 new)  
+
+### What was built
+
+**Phase 5.1 — Route Index (FastAPI/Starlette)** (`tool2_data_lineage.py`)
+- `build_route_index(repo_root, target_files, sources, trees)` → `dict[str, RouteEntry]` keyed by `"METHOD /path"`
+- Detects `@app.get/post/put/patch/delete("/path")` and `@router.get/post/...` decorators via AST
+- `RouteEntry` dataclass stores: `method`, `path`, `handler_name`, `file`, `line`, `end_line`, `col`, `func_node`
+- Handles sync and async handlers, `Depends()`, `response_model`, and all HTTP methods
+- Graceful handling of syntax errors and missing files (returns empty dict)
+
+**Phase 5.2 — Pydantic Model Index** (`tool2_data_lineage.py`)
+- `build_model_index(repo_root, target_files, sources, trees)` → `dict[str, PydanticModelEntry]`
+- Detects `BaseModel` subclasses via `_is_basemodel_subclass()` heuristic (checks base names against `_BASEMODEL_NAMES`)
+- `PydanticModelEntry` dataclass: `class_name`, `file`, `line/end_line/col`, `fields` (dict of `PydanticField`), `validators` (list of `PydanticValidator`), `bases`
+- `PydanticField` dataclass: `name`, `annotation`, `alias`, `has_default`, `line`, `col`
+- Extracts field aliases via `_extract_field_alias()` — detects `Field(alias="...")`
+- Detects `@field_validator`, `@validator`, `@model_validator` decorators with target field extraction
+- Detects field-level constraints via `_field_constraint_summary()` (ge, le, gt, lt, min_length, max_length, pattern)
+- Handles optional fields, complex types (`list[str]`, `dict[str, int]`), and default values
+
+**Phase 5.3 — Field Read/Write Site Detection** (`tool2_data_lineage.py`)
+- `trace_field(field_path, handler_file, handler_func_node, ...)` — main field tracing function
+- `_scan_function_body(func_node, field_name, model_name, ...)` — AST walker detecting:
+  - **Attribute reads**: `request.user_id` → access_pattern `"attribute"`, confidence `"high"`
+  - **Dict subscript reads**: `data["user_id"]` → access_pattern `"dict_subscript"`, confidence `"high"`
+  - **Dict `.get()` reads**: `data.get("user_id")` → access_pattern `"dict_get"`, confidence `"medium"`
+  - **Attribute writes**: `order.user_id = ...` → write site with breakage flags
+  - **Dict writes**: `data["user_id"] = ...` → write site
+  - **Transforms/casts**: `UUID(request.user_id)`, `str(request.user_id)` → transform entries
+  - **Chained attribute access**: `request.data.nested.user_id` → detected
+- `trace_field_in_function()` — convenience wrapper for testing with simplified interface
+- Breakage flags: `if_removed=True` (when no default), `if_renamed=True` (for literal keys)
+- Evidence snippets extracted from source lines
+- Confidence levels: `"high"` (direct attribute/subscript), `"medium"` (.get), `"low"` (heuristic)
+- No false positives: exact field name matching (not partial)
+
+**Phase 5.4 — Wire into Server + Output Assembly** (`tool2_data_lineage.py` + `server.py`)
+- `_resolve_entry_points(entry_points, route_index, func_index, sources, trees)` → `(resolved, diagnostics, handler_tuples)`
+  - `route:METHOD /path` anchors resolved against route index
+  - `symbol:file.py:func_name` anchors resolved against function index
+  - Unresolved anchors emit `Tool2Diagnostic(code="entry_point_unresolved")`
+- `_build_function_index(target_files, trees)` → `dict[str, FunctionEntry]` keyed by `"file.py:func_name"`
+- `_load_sources(repo_root, target_files)` — loads and parses `.py` files, returns `(sources, trees, error_count)`
+- `run_tool2(request: Tool2Request, repo_root: str)` → dict — full pipeline:
+  1. Parse field_path into model_name + field_name
+  2. Glob Python files and load sources
+  3. Build route index, model index, function index
+  4. Resolve entry points
+  5. Trace field in each resolved handler
+  6. Collect validations from model index (pydantic validators + field constraints)
+  7. Enforce `max_sites` truncation with `truncated=True` flag
+  8. Deterministic sort of all output arrays
+  9. Return `Tool2Result.model_dump(by_alias=True)`
+- Server `_build_tool2_result()` now delegates to `run_tool2()` (replaces stub)
+- `TOOL2_IMPL_VERSION = "1.0.0"`
+
+### Deterministic ID Generation
+- `_sha256_prefix(prefix, *parts)` — SHA-256 of `"|".join(parts)`, truncated to 16 hex chars
+- `_compute_site_id(field, symbol_id, file, line, col, pattern)` → `site_` + 16 hex
+- `_compute_validation_id(kind, field, file, line)` → `val_` + 16 hex
+- `_compute_transform_id(kind, field, file, line, col)` → `xform_` + 16 hex
+- `_compute_symbol_id(file, name, line)` → `sym_` + 16 hex
+
+### Key Implementation Details
+- **1,580 lines** of production code in `tool2_data_lineage.py`
+- **20+ functions** — public API, internal helpers, and dataclasses
+- Uses Python stdlib `ast` module for static analysis
+- Static heuristic for BaseModel detection (direct subclass only)
+- Two identical runs produce identical output (deterministic sort + content-derived IDs)
+
+### Acceptance Criteria Met
+- ✅ FastAPI route decorators detected (@app.get/post/put/patch/delete, @router.*)
+- ✅ Pydantic models with fields, aliases, validators, and constraints indexed
+- ✅ Field reads detected: attribute access, dict subscript, .get()
+- ✅ Field writes detected: attribute assignment, dict assignment
+- ✅ Transforms/casts detected (e.g., UUID(field), str(field))
+- ✅ Breakage flags set correctly (if_removed, if_renamed)
+- ✅ Entry points resolved from route: and symbol: anchors
+- ✅ Unresolved anchors produce diagnostics
+- ✅ max_sites truncation works with truncated flag
+- ✅ Deterministic: same inputs → identical output
+- ✅ Evidence snippets extracted from source
+- ✅ No false positives for unrelated fields
+- ✅ Syntax errors handled gracefully
+- ✅ Missing files produce empty results, not crashes
+- ✅ Server wired: `trace_data_shape` returns fully populated Tool2Result
+- ✅ `pytest tests/` — 280 tests passing
+
+---
+
+## Next Up: Milestone 6 — Tool 5: Test Impact Analyzer
 
 **Depends on**: M1 ✅, M2 ✅, M3 ✅  
 
-Phases:
-1. **5.1** — Route Index (FastAPI/Starlette)
-2. **5.2** — Pydantic Model Index
-3. **5.3** — Field Read/Write Site Detection
-4. **5.4** — Wire into Server + Output Assembly
-
-**Key files**: `blast_radius_mcp/tools/tool2_data_lineage.py` (currently stub)
+**Key files**: `blast_radius_mcp/tools/tool5_test_impact.py` (currently stub)
 
 ---
 
@@ -440,5 +529,6 @@ Phases:
 | `test_fingerprint.py` | 16 | safe_read_file, glob_python_files, file_hash, repo fingerprint |
 | `test_cache.py` | 21 | CacheDB CRUD, stats, cleanup (age + size cap), build_cache_key |
 | `test_tool1_ast.py` | 65 | AST engine: nodes, edges, cross-file, determinism, parse-mode fallback, integration |
+| `test_tool2.py` | 94 | Data lineage: IDs, routes, models, field tracing, entry points, integration, determinism |
 | `test_server.py` | 2 | execute_tool deterministic `run_id` persistence + cache-hit behavior |
-| **Total** | **186** | **All passing** |
+| **Total** | **280** | **All passing** |

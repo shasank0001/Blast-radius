@@ -1,0 +1,19 @@
+{
+	"$schema": "https://opencode.ai/config.json",
+	"mcp": {
+		"blast_radius": {
+			"type": "local",
+			"command": ["./blast_radius/.venv/bin/blast-radius-mcp"],
+			"enabled": true,
+			"timeout": 15000,
+			"environment": {
+				"BLAST_RADIUS_REPO_ROOT": ".",
+				"BLAST_RADIUS_CACHE_DB_PATH": ".cache/blast-radius/cache.db",
+				"BLAST_RADIUS_LOG_LEVEL": "INFO",
+				"BLAST_RADIUS_OPENAI_API_KEY": "{env:BLAST_RADIUS_OPENAI_API_KEY}",
+				"BLAST_RADIUS_PINECONE_API_KEY": "{env:BLAST_RADIUS_PINECONE_API_KEY}",
+				"BLAST_RADIUS_PINECONE_HOST": "{env:BLAST_RADIUS_PINECONE_HOST}"
+			}
+		}
+	}
+}

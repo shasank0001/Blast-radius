@@ -16,7 +16,7 @@ dependencies = [
     "tree-sitter-python",
     "rank-bm25",
     "openai",
-    "pinecone-client",
+    "pinecone",
 ]
 
 [project.optional-dependencies]

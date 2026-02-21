@@ -71,6 +71,28 @@ blast-radius-mcp
 
 This runs the MCP server over stdio (foreground process), which is what MCP clients (VS Code/OpenCode) expect for local servers.
 
+## Initialize Tool 3 semantic index (embedding path)
+
+For a new target repository, you can warm the semantic vector index once before demos:
+
+```bash
+python scripts/init_tool3_semantic_index.py \
+	--repo-root /absolute/path/to/target_repo
+```
+
+Required embedding settings:
+
+- `BLAST_RADIUS_OPENAI_API_KEY`
+- `BLAST_RADIUS_PINECONE_API_KEY`
+- `BLAST_RADIUS_PINECONE_INDEX`
+- `BLAST_RADIUS_PINECONE_HOST`
+
+Behavior:
+
+- Runs Tool 3 in `mode=embedding`.
+- Prints retrieval mode, backend, indexed chunk stats, diagnostics.
+- Exits `0` only when retrieval mode is `embedding_primary`.
+
 ## Connect in VS Code
 
 VS Code MCP config is stored in `.vscode/mcp.json` for workspace-scoped servers.

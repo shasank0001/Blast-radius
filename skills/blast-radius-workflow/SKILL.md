@@ -2,7 +2,6 @@
 name: blast-radius-workflow
 description: Evidence-first workflow for Blast Radius impact analysis using MCP tools and orchestrator. Use when users ask what might break from code changes (rename, remove, add, type change), need impacted files/symbols/tests, or want risk and confidence summaries for a target repository.
 ---
-
 # Blast Radius Workflow
 
 Use this workflow to produce a deterministic, evidence-backed blast radius result.
@@ -60,6 +59,7 @@ Return a concise report with:
 4. Evidence summary (which tools support each item)
 5. Prioritized tests to run first
 6. Assumptions and limitations
+7. A markdown artifact saved in the workspace (for example `blast_docs/BLAST_RADIUS_REPORT.md`)
 
 ## Escalation rules
 

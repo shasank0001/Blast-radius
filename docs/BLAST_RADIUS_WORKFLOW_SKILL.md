@@ -73,6 +73,7 @@ Return:
 - confidence and short evidence notes
 - recommended tests to run first
 - assumptions/limitations
+- save the final output as a markdown file artifact in the workspace (for example `docs/BLAST_RADIUS_REPORT.md`)
 
 ## Prompt Templates
 
@@ -122,4 +123,5 @@ asyncio.run(main())
 - At least one structural tool succeeded.
 - Report includes impacts + risks + confidence + tests.
 - Assumptions/limitations are explicit.
+- Final report is saved as a markdown file artifact in the workspace.
 - User can choose immediate next actions (code edits/tests).

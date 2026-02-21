@@ -24,6 +24,7 @@ from blast_radius_mcp.schemas.tool1_ast import (
     Tool1Result,
     Tool1Stats,
 )
+from blast_radius_mcp.tools.tool1_ast_engine import run_tool1
 from blast_radius_mcp.schemas.tool2_lineage import Tool2Result, Tool2Stats
 from blast_radius_mcp.schemas.tool3_semantic import (
     IndexStats,
@@ -205,25 +206,8 @@ TOOL5_IMPL_VERSION = "1.0.0"
 
 
 def _build_tool1_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
-    """Build Tool 1 stub result."""
-    result = Tool1Result(
-        language="python",
-        repo_root=repo_root,
-        files=[],
-        nodes=[],
-        edges=[],
-        diagnostics=[],
-        stats=Tool1Stats(
-            target_files=len(validated_inputs.target_files),
-            parsed_ok=0,
-            parsed_error=0,
-            nodes=0,
-            edges=0,
-            duration_ms=0,
-            cache=CacheStats(hits=0, misses=0),
-        ),
-    )
-    return json.loads(result.model_dump_json(by_alias=True))
+    """Build Tool 1 result using the AST engine."""
+    return run_tool1(validated_inputs, repo_root)
 
 
 def _build_tool2_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:

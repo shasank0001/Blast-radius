@@ -67,6 +67,7 @@ class IndexStats(BaseModel):
 
     chunks_total: int
     chunks_scanned: int
+    indexed_files: int = 0
     backend: Literal["openai_pinecone", "bm25"]
 
 

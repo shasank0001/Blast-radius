@@ -690,10 +690,30 @@ def run_tool4(validated_inputs: dict, repo_root: str) -> dict:
         )
 
     # ── 10. Assemble and return Tool4Result ──────────────────────────
+    # Compute date_range from commit dates.
+    if commits:
+        dates = sorted(c.date for c in commits)
+        earliest = dates[0][:10]
+        latest = dates[-1][:10]
+        date_range = f"{earliest} to {latest}"
+    else:
+        date_range = ""
+
+    # Compute files_in_history: unique file paths across all commits.
+    all_files_seen: set[str] = set()
+    for c in commits:
+        for fc in c.files:
+            all_files_seen.add(fc.path)
+            if fc.old_path is not None:
+                all_files_seen.add(fc.old_path)
+    files_in_history = len(all_files_seen)
+
     history_stats = HistoryStats(
         commits_scanned=scanned_count,
         commits_used=commits_used,
         renames_followed=renames_followed,
+        date_range=date_range,
+        files_in_history=files_in_history,
     )
 
     result = Tool4Result(

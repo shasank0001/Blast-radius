@@ -3,7 +3,7 @@
 > **Last Updated**: 2026-02-21  
 > **Repository**: https://github.com/shasank0001/Blast-radius.git  
 > **Branch**: `main`  
-> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 406 passing (0 failures)
+> **Python**: >=3.11 | **Build**: hatchling | **Tests**: 434 passing (0 failures)
 
 ---
 
@@ -118,6 +118,7 @@ blast_radius/
 8. Safe file I/O — path traversal protection via `safe_read_file()`
 9. Repo fingerprinting: git HEAD + dirty flag + SHA-256 of all `.py` file contents
 10. Server uses shared `execute_tool()` helper: parse envelope → validate → fingerprint → compute IDs → check cache → execute → store → return
+11. `settings.py` properly uses `pydantic_settings.BaseSettings` with `SettingsConfigDict(env_prefix="BLAST_RADIUS_", env_file=".env", extra="ignore")` — not plain `os.environ.get()`
 
 ---
 
@@ -130,7 +131,7 @@ blast_radius/
 
 **Phase 1.1 — Project Structure & Dependencies**
 - Created full project skeleton with `pyproject.toml` (hatchling build backend), all directories, and `__init__.py` files
-- `settings.py` using `pydantic_settings.BaseSettings` — loads `REPO_ROOT`, `CACHE_DB_PATH` (default `~/.blast_radius/cache.db`), `SCHEMA_VERSION`, `LOG_LEVEL`, `OPENAI_API_KEY`, `PINECONE_API_KEY`, etc.
+- `settings.py` properly uses `pydantic_settings.BaseSettings` with `SettingsConfigDict(env_prefix="BLAST_RADIUS_", env_file=".env", extra="ignore")` — loads `REPO_ROOT`, `CACHE_DB_PATH` (default `~/.blast_radius/cache.db`), `SCHEMA_VERSION`, `LOG_LEVEL`, `OPENAI_API_KEY`, `PINECONE_API_KEY`, etc. (Fixed post-M7: previously was a plain class with `os.environ.get()`.)
 - `logging_config.py` with `JSONFormatter` emitting structured logs with `run_id`, `query_id`, `tool_name`, `cached`, `timing_ms`
 - `ids.py` with `canonical_json()`, `compute_run_id()`, `compute_query_id()`, `compute_cache_key()`, `normalize_intent()`, `compute_diff_hash()` — all SHA-256, deterministic
 
@@ -726,6 +727,41 @@ blast_radius/
 
 ---
 
+## Post-M7 Fixes
+
+After completing all milestones M1–M7, a thorough review pass identified and resolved the following issues.
+
+### Major fix
+- **settings.py**: Now properly uses `pydantic_settings.BaseSettings` with `SettingsConfigDict(env_prefix="BLAST_RADIUS_", env_file=".env", extra="ignore")`. Previously was a plain class with `os.environ.get()` calls.
+
+### Medium fixes (6)
+1. **tool1_ast_engine.py**: `_has_yield()` now uses a recursive walker that stops at nested `FunctionDef`/`AsyncFunctionDef`/`Lambda` — prevents false-positive generator detection on outer functions containing nested generators.
+2. **orchestrator/__init__.py**: Removed redundant `assign_risk_surface()` call (already runs inside `merge_evidence()`).
+3. **tool2_data_lineage.py**: `_is_basemodel_subclass()` now traverses inheritance transitively via BFS with cycle guard — `OrderRequest(BaseRequest)` where `BaseRequest(BaseModel)` is now correctly detected.
+4. **tool5_test_impact.py**: Fixed operator precedence bug in `_is_test_filename` — added proper parentheses.
+5. **schemas/tool4_coupling.py + tool4_temporal_coupling.py**: Added `date_range` and `files_in_history` fields to `HistoryStats`.
+6. **tool3_semantic_neighbors.py + server.py**: Added fingerprint-based caching to skip Pinecone re-indexing when repo unchanged.
+
+### Minor fixes (9)
+1. **schemas/common.py**: Added `detail: str = ""` to `StructuredError`.
+2. **schemas/common.py**: Added `run_id: str = ""` and `tool_name: str = ""` to `ToolRequestEnvelope`.
+3. **tool1_ast_engine.py + schemas/tool1_ast.py**: `build_cross_file_index()` now returns ambiguities list; emits `ambiguous_symbol` diagnostics. `Diagnostic` model now has optional `code` and optional `range`.
+4. **orchestrator/merge_evidence.py**: Fixed type hints from `dict[str, Any]` to `dict[str, Any] | None` for all 5 tool result parameters.
+5. **tests/test_orchestrator_units.py**: NEW file with 23 tests for `normalize_intent`, `parse_unified_diff`, `merge_evidence`, `prune_candidates`.
+6. **tool2_data_lineage.py**: Added detection for 6 previously unemitted schema enum values: `model_field`, `serializer`, `custom_guard`, `defaulting`, `normalization`, `alias_ambiguous`.
+7. **tool5_test_impact.py + server.py**: Changed `run_tool5` to accept `dict` (like Tool 3/4) instead of typed `Tool5Request` for API consistency.
+8. **schemas/tool3_semantic.py + tool3_semantic_neighbors.py**: Added `indexed_files: int = 0` to `IndexStats`, populated with unique file count.
+9. **tests/fixtures/tool3_response.json + tool4_response.json**: Updated fixtures for new fields.
+
+### Test impact
+- Tests: 406 → 434 (28 net new)
+- New test file: `test_orchestrator_units.py` — 23 tests for `normalize_intent`, `parse_unified_diff`, `merge_evidence`, `prune_candidates`
+- `test_tool1_ast.py`: 65 → 66 (new ambiguity test)
+- `test_tool3.py`: 37 → 38 (new `indexed_files` assertion)
+- 0 failures
+
+---
+
 ## Next Up: Milestone 8 — End-to-End Integration, Demo Hardening, Polish
 
 **Depends on**: M1–M7 ✅  
@@ -742,10 +778,11 @@ blast_radius/
 | `test_ids.py` | 24 | canonical_json, run_id, query_id, cache_key, normalize, diff_hash |
 | `test_fingerprint.py` | 16 | safe_read_file, glob_python_files, file_hash, repo fingerprint |
 | `test_cache.py` | 21 | CacheDB CRUD, stats, cleanup (age + size cap), build_cache_key |
-| `test_tool1_ast.py` | 65 | AST engine: nodes, edges, cross-file, determinism, parse-mode fallback, integration |
+| `test_tool1_ast.py` | 66 | AST engine: nodes, edges, cross-file, ambiguity, determinism, parse-mode fallback, integration |
 | `test_tool2.py` | 94 | Data lineage: IDs, routes, models, field tracing, entry points, integration, determinism |
-| `test_tool3.py` | 37 | Semantic neighbors: tokenization, chunking, BM25 search, integration, diagnostics |
+| `test_tool3.py` | 38 | Semantic neighbors: tokenization, chunking, BM25 search, indexed_files, integration, diagnostics |
 | `test_tool4.py` | 34 | Temporal coupling: helpers, git parsing, rename maps, coupling scoring, integration |
 | `test_tool5.py` | 50 | Test impact: helpers, discovery, index, module graph, scoring, integration |
 | `test_server.py` | 2 | execute_tool deterministic `run_id` persistence + cache-hit behavior |
-| **Total** | **406** | **All passing** |
+| `test_orchestrator_units.py` | 23 | normalize_intent, parse_unified_diff, merge_evidence, prune_candidates |
+| **Total** | **434** | **All passing** |

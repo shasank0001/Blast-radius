@@ -32,7 +32,6 @@ from blast_radius_mcp.settings import settings
 from orchestrator.diff_parser import DiffResult, parse_unified_diff
 from orchestrator.merge_evidence import (
     ImpactCandidate,
-    assign_risk_surface,
     merge_evidence,
     prune_candidates,
 )
@@ -122,11 +121,10 @@ async def run_blast_radius(
     4. Compute ``run_id`` (if not supplied)
     5. Build tool-call plan
     6. Execute each tool, collecting results and query IDs
-    7. Merge evidence from all tools
+    7. Merge evidence from all tools (risk surfaces assigned here)
     8. Prune low-signal candidates
-    9. Assign risk surfaces
-    10. Build assumptions / limitations
-    11. Render and return the Markdown report
+    9. Build assumptions / limitations
+    10. Render and return the Markdown report
     """
     if anchors is None:
         anchors = []
@@ -203,8 +201,8 @@ async def run_blast_radius(
     # ── 8. Prune candidates ─────────────────────────────────────────
     pruned: list[ImpactCandidate] = prune_candidates(candidates, change_spec)
 
-    # ── 9. Assign risk surfaces ─────────────────────────────────────
-    impacts: list[ImpactCandidate] = assign_risk_surface(pruned)
+    # ── 9. Use pruned candidates (risk surfaces already assigned in merge_evidence)
+    impacts: list[ImpactCandidate] = pruned
 
     # ── 10. Build assumptions & limitations ─────────────────────────
     assumptions: list[str] = _build_assumptions(diff, anchors, tool_errors)

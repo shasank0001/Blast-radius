@@ -258,11 +258,27 @@ def _node_end_line(node: ast.AST) -> int:
 
 
 def _has_yield(node: ast.AST) -> bool:
-    """Check whether a function body contains Yield or YieldFrom."""
-    for child in ast.walk(node):
-        if isinstance(child, (ast.Yield, ast.YieldFrom)):
-            return True
-    return False
+    """Check whether a function body contains Yield or YieldFrom.
+
+    Uses a recursive walker that stops descending into nested
+    FunctionDef, AsyncFunctionDef, and Lambda nodes so that yields
+    inside nested scopes are not attributed to the outer function.
+    """
+
+    def _walk(nodes: list[ast.AST]) -> bool:
+        for n in nodes:
+            if isinstance(n, (ast.Yield, ast.YieldFrom)):
+                return True
+            # Don't descend into nested function / lambda scopes
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if _walk(list(ast.iter_child_nodes(n))):
+                return True
+        return False
+
+    # Start from the children of the node (the function body) so we
+    # don't immediately skip the top-level function node itself.
+    return _walk(list(ast.iter_child_nodes(node)))
 
 
 def _decorator_names(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
@@ -843,16 +859,30 @@ def emit_edges(
 
 def build_cross_file_index(
     nodes_by_file: dict[str, list[ASTNode]],
-) -> dict[str, tuple[str, str, str]]:
+) -> tuple[dict[str, tuple[str, str, str]], list[dict[str, str]]]:
     """Build a mapping: ``qualified_name → (file, node_id, kind)``.
 
     Used for cross-file edge resolution.
+
+    Returns:
+        A tuple of ``(index, ambiguities)`` where *ambiguities* is a list
+        of dicts describing duplicate qualified-name definitions across files.
     """
     index: dict[str, tuple[str, str, str]] = {}
+    ambiguities: list[dict[str, str]] = []
     for file_path, nodes in nodes_by_file.items():
         for n in nodes:
+            if n.qualified_name in index:
+                existing = index[n.qualified_name]
+                ambiguities.append({
+                    "qualified_name": n.qualified_name,
+                    "file1": existing[0],
+                    "file2": file_path,
+                })
+                # Keep first entry (don't overwrite)
+                continue
             index[n.qualified_name] = (n.file, n.id, n.kind)
-    return index
+    return index, ambiguities
 
 
 def resolve_cross_file_edges(
@@ -1035,7 +1065,21 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
         all_edges.extend(file_edges)
 
     # Step 6: Build cross-file index
-    cross_file_index = build_cross_file_index(nodes_by_file)
+    cross_file_index, ambiguities = build_cross_file_index(nodes_by_file)
+
+    # Emit diagnostics for ambiguous qualified names
+    for amb in ambiguities:
+        diagnostics.append(
+            Diagnostic(
+                file=amb["file2"],
+                severity="warning",
+                message=(
+                    f"Ambiguous symbol '{amb['qualified_name']}': "
+                    f"already defined in {amb['file1']}"
+                ),
+                code="ambiguous_symbol",
+            )
+        )
 
     # Step 7: Resolve cross-file edges
     all_edges = resolve_cross_file_edges(all_edges, cross_file_index, import_maps)

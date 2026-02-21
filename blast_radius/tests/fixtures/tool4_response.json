@@ -36,7 +36,9 @@
     "history_stats": {
       "commits_scanned": 500,
       "commits_used": 378,
-      "renames_followed": 2
+      "renames_followed": 2,
+      "date_range": "2024-01-15 to 2025-06-20",
+      "files_in_history": 42
     },
     "diagnostics": []
   },

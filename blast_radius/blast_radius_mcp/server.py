@@ -248,19 +248,32 @@ def _build_tool2_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]
     return run_tool2(validated_inputs, repo_root)
 
 
+def _as_plain_dict(validated_inputs: Any) -> dict[str, Any]:
+    """Convert validated inputs to plain dict when they come as Pydantic models."""
+    if isinstance(validated_inputs, dict):
+        return validated_inputs
+    model_dump = getattr(validated_inputs, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(by_alias=True)
+    return dict(validated_inputs)
+
+
 def _build_tool3_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
     """Build Tool 3 result using the Semantic Neighbor Search engine."""
-    return run_tool3(validated_inputs, repo_root)
+    # Compute fingerprint hash so Tool 3 can skip Pinecone re-indexing
+    # when the repo hasn't changed.
+    repo_fp = compute_repo_fingerprint(repo_root)
+    return run_tool3(_as_plain_dict(validated_inputs), repo_root, fingerprint_hash=repo_fp.fingerprint_hash)
 
 
 def _build_tool4_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
     """Build Tool 4 result using the Temporal Coupling engine."""
-    return run_tool4(validated_inputs, repo_root)
+    return run_tool4(_as_plain_dict(validated_inputs), repo_root)
 
 
 def _build_tool5_result(validated_inputs: Any, repo_root: str) -> dict[str, Any]:
     """Build Tool 5 result using the Test Impact Analyzer."""
-    return run_tool5(validated_inputs, repo_root)
+    return run_tool5(_as_plain_dict(validated_inputs), repo_root)
 
 
 # ── Tool 1: AST Structural Engine ───────────────────────────────────

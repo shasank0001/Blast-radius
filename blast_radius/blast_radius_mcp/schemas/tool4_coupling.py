@@ -66,6 +66,8 @@ class HistoryStats(BaseModel):
     commits_scanned: int
     commits_used: int
     renames_followed: int
+    date_range: str = ""
+    files_in_history: int = 0
 
 
 class Tool4Diagnostic(BaseModel):

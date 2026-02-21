@@ -953,7 +953,7 @@ class TestBuildCrossFileIndex:
                 end=Position(line=2, col=0),
             ),
         )
-        index = build_cross_file_index({"utils.py": [node]})
+        index, ambiguities = build_cross_file_index({"utils.py": [node]})
         assert "utils.helper" in index
         file, nid, kind = index["utils.helper"]
         assert file == "utils.py"
@@ -983,6 +983,41 @@ class TestBuildCrossFileIndex:
                 end=Position(line=2, col=0),
             ),
         )
-        index = build_cross_file_index({"a.py": [n1], "b.py": [n2]})
+        index, ambiguities = build_cross_file_index({"a.py": [n1], "b.py": [n2]})
         assert "a" in index
         assert "b.go" in index
+        assert ambiguities == []
+
+    def test_duplicate_qualified_name(self):
+        n1 = ASTNode(
+            id="sym_aaaaaaaaaaaaaaaa",
+            kind="function",
+            name="helper",
+            qualified_name="utils.helper",
+            file="a.py",
+            range=Range(
+                start=Position(line=1, col=0),
+                end=Position(line=2, col=0),
+            ),
+        )
+        n2 = ASTNode(
+            id="sym_bbbbbbbbbbbbbbbb",
+            kind="function",
+            name="helper",
+            qualified_name="utils.helper",
+            file="b.py",
+            range=Range(
+                start=Position(line=1, col=0),
+                end=Position(line=2, col=0),
+            ),
+        )
+        index, ambiguities = build_cross_file_index({"a.py": [n1], "b.py": [n2]})
+        # First entry is kept
+        file, nid, kind = index["utils.helper"]
+        assert file == "a.py"
+        assert nid == "sym_aaaaaaaaaaaaaaaa"
+        # Ambiguity is reported
+        assert len(ambiguities) == 1
+        assert ambiguities[0]["qualified_name"] == "utils.helper"
+        assert ambiguities[0]["file1"] == "a.py"
+        assert ambiguities[0]["file2"] == "b.py"

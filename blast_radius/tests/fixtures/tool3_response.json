@@ -30,6 +30,7 @@
     "index_stats": {
       "chunks_total": 100,
       "chunks_scanned": 100,
+      "indexed_files": 10,
       "backend": "bm25"
     },
     "diagnostics": []

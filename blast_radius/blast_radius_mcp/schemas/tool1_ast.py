@@ -162,7 +162,8 @@ class Diagnostic(BaseModel):
     file: str
     severity: Literal["info", "warning", "error"]
     message: str
-    range: Range
+    range: Range | None = None
+    code: str | None = None
 
 
 class CacheStats(BaseModel):

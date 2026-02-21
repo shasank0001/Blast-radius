@@ -45,6 +45,7 @@ class StructuredError(BaseModel):
 
     code: str
     message: str
+    detail: str = ""
     retryable: bool = False
     location: Location | None = None
 
@@ -54,6 +55,8 @@ class ToolRequestEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: str = "v1"
+    run_id: str = ""
+    tool_name: str = ""
     repo_root: str
     inputs: dict
     anchors: list[str] = []

@@ -96,7 +96,7 @@ def _is_test_filename(filename: str) -> bool:
     Matches ``test_*.py`` and ``*_test.py``.
     """
     base = os.path.basename(filename)
-    return base.startswith("test_") and base.endswith(".py") or base.endswith("_test.py")
+    return base.endswith(".py") and (base.startswith("test_") or base[:-3].endswith("_test"))
 
 
 # ── Internal data structures ─────────────────────────────────────────
@@ -751,7 +751,7 @@ def score_tests(
 # ── Phase 6.4 — Main Entry Point ─────────────────────────────────────
 
 
-def run_tool5(request: Tool5Request, repo_root: str) -> dict:
+def run_tool5(validated_inputs: dict, repo_root: str) -> dict:
     """Execute Tool 5 — Test Impact Analyzer.
 
     Orchestrates the full pipeline:
@@ -763,12 +763,13 @@ def run_tool5(request: Tool5Request, repo_root: str) -> dict:
     5. Assemble the result payload.
 
     Args:
-        request: Validated :class:`Tool5Request`.
+        validated_inputs: Dict with keys matching :class:`Tool5Request` fields.
         repo_root: Absolute or relative path to the repository root.
 
     Returns:
         A ``dict`` matching ``Tool5Result.model_dump(by_alias=True)``.
     """
+    request = Tool5Request.model_validate(validated_inputs)
     all_diagnostics: list[Tool5Diagnostic] = []
     options = request.options
 

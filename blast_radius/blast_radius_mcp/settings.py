@@ -2,29 +2,42 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings:
+class Settings(BaseSettings):
     """Blast Radius MCP settings, loaded from environment variables."""
 
-    def __init__(self) -> None:
-        self.REPO_ROOT: str = os.environ.get("REPO_ROOT", ".")
-        self.CACHE_DB_PATH: str = os.environ.get(
-            "CACHE_DB_PATH",
-            str(Path.home() / ".blast_radius" / "cache.db"),
-        )
-        self.SCHEMA_VERSION: str = "v1"
-        self.LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
-        self.OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
-        self.PINECONE_API_KEY: str = os.environ.get("PINECONE_API_KEY", "")
-        self.PINECONE_INDEX: str = os.environ.get("PINECONE_INDEX", "")
-        self.PINECONE_HOST: str = os.environ.get("PINECONE_HOST", "")
-        self.OPENAI_EMBEDDING_MODEL: str = os.environ.get(
-            "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
-        )
+    model_config = SettingsConfigDict(
+        env_prefix="BLAST_RADIUS_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    REPO_ROOT: str = Field(default=".")
+    CACHE_DB_PATH: str = Field(default="~/.blast_radius/cache.db")
+    SCHEMA_VERSION: str = Field(default="v1")
+    LOG_LEVEL: str = Field(default="INFO")
+    OPENAI_API_KEY: str = Field(default="")
+    PINECONE_API_KEY: str = Field(default="")
+    PINECONE_INDEX: str = Field(default="blast-radius")
+    PINECONE_HOST: str = Field(default="")
+    OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small")
 
 
 # Module-level singleton
-settings = Settings()
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """Return the cached settings singleton, creating it on first call."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+# Backward-compatible module-level instance so existing
+# ``from blast_radius_mcp.settings import settings`` keeps working.
+settings: Settings = get_settings()

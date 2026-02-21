@@ -178,3 +178,41 @@ async def test_execute_tool_cache_hit_uses_current_run_id_and_persists_new_run(
     stats = server._get_cache().get_stats()
     assert stats["runs"] == 2
     assert stats["tool_results"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_tool3_builder_handles_validated_model(isolated_cache, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "module.py").write_text(
+        "def search_users(query):\n    return query\n",
+        encoding="utf-8",
+    )
+
+    request = {
+        "schema_version": "v1",
+        "repo_root": str(repo_root),
+        "inputs": {
+            "query_text": "search users query",
+            "scope": {"paths": ["module.py"]},
+            "options": {"mode": "bm25", "min_score": 0.0},
+        },
+        "anchors": [],
+        "diff": "",
+        "options": {"intent": "find semantic neighbors"},
+    }
+
+    response = json.loads(
+        await server.execute_tool(
+            "find_semantic_neighbors",
+            server.TOOL3_IMPL_VERSION,
+            request,
+            server._build_tool3_result,
+        )
+    )
+
+    assert response["errors"] == []
+    assert response["result"]["retrieval_mode"] in {
+        "embedding_primary",
+        "bm25_fallback",
+    }

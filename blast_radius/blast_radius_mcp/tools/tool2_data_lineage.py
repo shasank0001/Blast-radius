@@ -420,12 +420,25 @@ _BASEMODEL_NAMES = frozenset({
 })
 
 
-def _is_basemodel_subclass(node: ast.ClassDef) -> bool:
-    """Heuristic: does *node* inherit from ``BaseModel`` (or similar)?"""
-    for base in node.bases:
-        name = _safe_unparse(base)
-        if name in _BASEMODEL_NAMES or name.endswith("BaseModel"):
+def _is_basemodel_subclass(node: ast.ClassDef, class_bases_map: dict[str, list[str]]) -> bool:
+    """Check if *node* transitively inherits from ``BaseModel`` (or similar).
+
+    Uses *class_bases_map* (class_name → list of base class names) to walk the
+    inheritance chain so that indirect subclasses such as
+    ``OrderRequest(BaseRequest)`` where ``BaseRequest(BaseModel)`` are detected.
+    A *visited* set prevents infinite loops from circular inheritance.
+    """
+    visited: set[str] = set()
+    queue = [_safe_unparse(b) for b in node.bases]
+    while queue:
+        base = queue.pop()
+        if base in _BASEMODEL_NAMES or base.endswith("BaseModel"):
             return True
+        if base in visited:
+            continue
+        visited.add(base)
+        if base in class_bases_map:
+            queue.extend(class_bases_map[base])
     return False
 
 
@@ -515,6 +528,18 @@ def build_model_index(
     """
     index: dict[str, PydanticModelEntry] = {}
 
+    # Build a mapping of class_name → base_class_names from ALL parsed
+    # ClassDef nodes so that _is_basemodel_subclass can resolve transitive
+    # inheritance (e.g. OrderRequest → BaseRequest → BaseModel).
+    class_bases_map: dict[str, list[str]] = {}
+    for rel_path in target_files:
+        tree = trees.get(rel_path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                class_bases_map[node.name] = [_safe_unparse(b) for b in node.bases]
+
     for rel_path in target_files:
         tree = trees.get(rel_path)
         if tree is None:
@@ -523,7 +548,7 @@ def build_model_index(
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            if not _is_basemodel_subclass(node):
+            if not _is_basemodel_subclass(node, class_bases_map):
                 continue
 
             end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
@@ -829,6 +854,60 @@ def _scan_function_body(
                         confidence="medium",
                     ))
 
+            # ── Transform: normalization — ``field.lower()`` etc. ─
+            if (isinstance(node.func, ast.Attribute)
+                    and node.func.attr in _NORMALIZATION_METHODS
+                    and _node_references_field(node.func.value, field_name)):
+                line = node.lineno
+                col = node.col_offset
+                end_line = getattr(node, "end_lineno", line) or line
+                end_col = getattr(node, "end_col_offset", col) or col
+                location = _loc_from_lines(file, line, col, end_line, end_col)
+                transforms.append(Transform(
+                    transform_id=_compute_transform_id("normalization", field_path, file, line, col),
+                    kind="normalization",
+                    from_field=field_path,
+                    to_field=field_path,
+                    location=location,
+                    enclosing_symbol_id=enclosing_symbol_id,
+                    confidence="medium",
+                ))
+
+        # ── Transform: defaulting — ``field or default`` ─────────
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            if any(_node_references_field(v, field_name) for v in node.values):
+                line = node.lineno
+                col = node.col_offset
+                end_line = getattr(node, "end_lineno", line) or line
+                end_col = getattr(node, "end_col_offset", col) or col
+                location = _loc_from_lines(file, line, col, end_line, end_col)
+                transforms.append(Transform(
+                    transform_id=_compute_transform_id("defaulting", field_path, file, line, col),
+                    kind="defaulting",
+                    from_field=field_path,
+                    to_field=field_path,
+                    location=location,
+                    enclosing_symbol_id=enclosing_symbol_id,
+                    confidence="medium",
+                ))
+
+        # ── Transform: defaulting — ``field if field else default``
+        if isinstance(node, ast.IfExp) and _node_references_field(node.test, field_name):
+            line = node.lineno
+            col = node.col_offset
+            end_line = getattr(node, "end_lineno", line) or line
+            end_col = getattr(node, "end_col_offset", col) or col
+            location = _loc_from_lines(file, line, col, end_line, end_col)
+            transforms.append(Transform(
+                transform_id=_compute_transform_id("defaulting", field_path, file, line, col),
+                kind="defaulting",
+                from_field=field_path,
+                to_field=field_path,
+                location=location,
+                enclosing_symbol_id=enclosing_symbol_id,
+                confidence="medium",
+            ))
+
     return reads, writes, transforms
 
 
@@ -895,10 +974,55 @@ _CAST_NAMES = frozenset({
     "datetime", "date", "time", "timedelta",
 })
 
+_NORMALIZATION_METHODS = frozenset({
+    "lower", "upper", "strip", "lstrip", "rstrip",
+    "replace", "encode", "decode", "title", "capitalize",
+})
+
 
 def _is_type_cast_call(callee_text: str) -> bool:
     """Return ``True`` if *callee_text* looks like a type cast/constructor."""
     return callee_text in _CAST_NAMES
+
+
+def _scan_custom_guards(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    field_name: str,
+    field_path: str,
+    file: str,
+    source_lines: list[str],
+    enclosing_qname: str,
+    enclosing_line: int,
+) -> list[Validation]:
+    """Detect inline guard patterns like ``if not field: raise ValueError``."""
+    validations: list[Validation] = []
+    enclosing_symbol_id = _compute_symbol_id(enclosing_qname, file, enclosing_line)
+
+    for node in ast.walk(func_node):
+        if not isinstance(node, ast.If):
+            continue
+        # Check if the test references the field
+        if not _node_references_field(node.test, field_name):
+            continue
+        # Check if the body contains a Raise statement
+        has_raise = any(isinstance(stmt, ast.Raise) for stmt in ast.walk(node))
+        if not has_raise:
+            continue
+        line = node.lineno
+        col = node.col_offset
+        snippet = _snippet_from_lines(source_lines, line, line)
+        loc = _loc_from_lines(file, line, col, line, col)
+        validations.append(Validation(
+            validation_id=_compute_validation_id("custom_guard", field_path, file, line),
+            kind="custom_guard",
+            field_path=field_path,
+            location=loc,
+            enclosing_symbol_id=enclosing_symbol_id,
+            rule_summary=snippet.strip()[:120],
+            confidence="medium",
+        ))
+
+    return validations
 
 
 def _find_assignment_target(call_node: ast.Call, func_node: ast.AST) -> str | None:
@@ -1514,8 +1638,107 @@ def run_tool2(request: Tool2Request, repo_root: str) -> dict:
         all_writes.extend(w)
         all_transforms.extend(t)
 
+    # Step 5b — Emit model_field sites for Pydantic field definitions
+    fp_parts = request.field_path.rsplit(".", 1)
+    _fp_model = fp_parts[0] if len(fp_parts) == 2 else None
+    _fp_field = fp_parts[-1]
+
+    if _fp_model and _fp_model in model_index:
+        _model = model_index[_fp_model]
+        if _fp_field in _model.fields:
+            pf = _model.fields[_fp_field]
+            _src = sources.get(_model.file)
+            _snippet = ""
+            if _src:
+                _snippet = _snippet_from_lines(_src.splitlines(), pf.line, pf.line).strip()
+            loc = _loc_from_lines(_model.file, pf.line, pf.col, pf.line, pf.col)
+            encl_sym = _compute_symbol_id(_model.class_name, _model.file, _model.line)
+            all_reads.append(ReadWriteSite(
+                site_id=_compute_site_id(request.field_path, _model.class_name, _model.file, pf.line, pf.col, "model_field"),
+                field_path=request.field_path,
+                location=loc,
+                enclosing_symbol_id=encl_sym,
+                access_pattern="model_field",
+                breakage=Breakage(if_removed=True, if_renamed=True, if_type_changed=True),
+                confidence="high",
+                evidence_snippet=_snippet or None,
+            ))
+
+    # Step 5c — Emit serializer sites for @field_serializer / @serializer methods
+    if _fp_model and _fp_model in model_index:
+        _model = model_index[_fp_model]
+        _tree = trees.get(_model.file)
+        _src = sources.get(_model.file)
+        if _tree and _src:
+            _src_lines = _src.splitlines()
+            for cls_node in ast.walk(_tree):
+                if not (isinstance(cls_node, ast.ClassDef) and cls_node.name == _fp_model):
+                    continue
+                for stmt in cls_node.body:
+                    if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    _is_ser = False
+                    for dec in stmt.decorator_list:
+                        dec_text = _safe_unparse(dec)
+                        if any(kw in dec_text for kw in ("field_serializer", "serializer", "model_serializer")):
+                            # Check if this serializer targets our field
+                            if isinstance(dec, ast.Call):
+                                for arg in dec.args:
+                                    if isinstance(arg, ast.Constant) and arg.value == _fp_field:
+                                        _is_ser = True
+                                        break
+                            # model_serializer applies to all fields
+                            if "model_serializer" in dec_text:
+                                _is_ser = True
+                            break
+                    if _is_ser:
+                        line = stmt.lineno
+                        col = stmt.col_offset
+                        snippet = _snippet_from_lines(_src_lines, line, line).strip()
+                        encl_sym = _compute_symbol_id(_model.class_name, _model.file, _model.line)
+                        loc = _loc_from_lines(_model.file, line, col, line, col)
+                        all_reads.append(ReadWriteSite(
+                            site_id=_compute_site_id(request.field_path, _model.class_name, _model.file, line, col, "serializer"),
+                            field_path=request.field_path,
+                            location=loc,
+                            enclosing_symbol_id=encl_sym,
+                            access_pattern="serializer",
+                            breakage=Breakage(if_removed=True, if_renamed=True, if_type_changed=None),
+                            confidence="high",
+                            evidence_snippet=snippet or None,
+                        ))
+
+    # Step 5d — Scan handlers for custom_guard validations
+    custom_guard_vals: list[Validation] = []
+    for handler_file, handler_qname, func_node, handler_name, handler_line, handler_lines in handler_tuples:
+        custom_guard_vals.extend(_scan_custom_guards(
+            func_node=func_node,
+            field_name=_fp_field,
+            field_path=request.field_path,
+            file=handler_file,
+            source_lines=handler_lines,
+            enclosing_qname=handler_qname,
+            enclosing_line=handler_line,
+        ))
+
+    # Step 5e — Check for alias_ambiguous diagnostics
+    _alias_seen: dict[str, list[str]] = {}  # alias → list of field qualified names
+    for mname, mentry in model_index.items():
+        for fname, fld in mentry.fields.items():
+            if fld.alias:
+                _alias_seen.setdefault(fld.alias, []).append(f"{mname}.{fname}")
+    for alias_val, field_list in _alias_seen.items():
+        if len(field_list) > 1:
+            diagnostics.append(Tool2Diagnostic(
+                severity="warning",
+                code="alias_ambiguous",
+                message=f"Alias '{alias_val}' is shared by multiple fields: {', '.join(sorted(field_list))}",
+                location=None,
+            ))
+
     # Step 6 — Build validations
     validations = _build_validations(request.field_path, model_index)
+    validations.extend(custom_guard_vals)
 
     # Step 7a — Filter by direction
     if request.options.direction == "request":

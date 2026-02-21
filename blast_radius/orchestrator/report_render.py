@@ -218,13 +218,13 @@ def _render_temporal_coupling(tool_results: dict[str, dict]) -> str:
     if not result:
         return header + "Tool not executed or no data available.\n"
 
-    coupled_files: list[dict] = result.get("coupled_files", [])
-    if not coupled_files:
+    couplings: list[dict] = result.get("couplings") or result.get("coupled_files", [])
+    if not couplings:
         return header + "No temporal coupling detected.\n"
 
     lines = [header]
-    for entry in coupled_files:
-        file_ = entry.get("file", "?")
+    for entry in couplings:
+        file_ = entry.get("coupled_file") or entry.get("file", "?")
         weight = entry.get("weight", 0)
         if isinstance(weight, float) and weight <= 1.0:
             weight_str = f"{weight * 100:.0f}%"
@@ -249,8 +249,20 @@ def _render_tests(tool_results: dict[str, dict]) -> str:
 
     lines = [header, "Ranked list:"]
     for i, t in enumerate(tests, 1):
-        node = t.get("node_id", t.get("test", "?"))
-        reason = t.get("reason", "covers the impacted path")
+        node = t.get("nodeid") or t.get("node_id") or t.get("test") or "?"
+
+        reason = "covers the impacted path"
+        reasons = t.get("reasons", [])
+        if reasons and isinstance(reasons[0], dict):
+            reason = (
+                reasons[0].get("evidence")
+                or reasons[0].get("reason")
+                or reasons[0].get("type")
+                or reason
+            )
+        else:
+            reason = t.get("reason", reason)
+
         lines.append(f"{i}. `{node}` — {reason}")
 
     lines.append("")

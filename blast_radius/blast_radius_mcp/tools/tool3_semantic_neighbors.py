@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from typing import Any
 
@@ -46,6 +47,26 @@ logger = logging.getLogger(__name__)
 # ── Module-level constants ───────────────────────────────────────────
 
 TOOL3_IMPL_VERSION = "1.0.0"
+
+# ── Pinecone index fingerprint cache ────────────────────────────────
+# Tracks which repos have already been indexed for the current process.
+# Keyed by absolute repo path → last-indexed fingerprint hash.
+_INDEXED_FINGERPRINTS: dict[str, str] = {}
+
+
+def _needs_reindex(repo_root: str, fingerprint_hash: str) -> bool:
+    """Check if repo needs re-indexing based on fingerprint."""
+    key = os.path.abspath(repo_root)
+    if _INDEXED_FINGERPRINTS.get(key) == fingerprint_hash:
+        return False
+    return True
+
+
+def _mark_indexed(repo_root: str, fingerprint_hash: str) -> None:
+    """Mark repo as indexed with given fingerprint."""
+    key = os.path.abspath(repo_root)
+    _INDEXED_FINGERPRINTS[key] = fingerprint_hash
+
 
 # ── Deterministic ID helper ─────────────────────────────────────────
 
@@ -101,6 +122,8 @@ def _run_embedding_path(
     top_k: int,
     min_score: float,
     diagnostics: list[Tool3Diagnostic],
+    fingerprint_hash: str = "",
+    repo_root: str = "",
 ) -> list[Neighbor] | None:
     """Attempt embedding-based retrieval.  Returns neighbours or ``None``.
 
@@ -132,8 +155,9 @@ def _run_embedding_path(
             host=settings.PINECONE_HOST,
         )
 
-        # — Embed & upsert chunks ────────────────────────────────────
-        if chunks:
+        # — Embed & upsert chunks (skip if already indexed) ──────────
+        needs_upsert = _needs_reindex(repo_root, fingerprint_hash) if (repo_root and fingerprint_hash) else True
+        if chunks and needs_upsert:
             chunk_texts = [c.source for c in chunks]
             chunk_ids = [c.chunk_id for c in chunks]
             metadata = [
@@ -150,6 +174,13 @@ def _run_embedding_path(
             vectors = embedder.embed(chunk_texts)
             store.upsert(chunk_ids, vectors, metadata)
             logger.debug("Upserted %d chunk vectors to Pinecone", len(chunks))
+            if repo_root and fingerprint_hash:
+                _mark_indexed(repo_root, fingerprint_hash)
+        elif chunks:
+            logger.debug(
+                "Skipping Pinecone upsert — repo already indexed (fingerprint=%s)",
+                fingerprint_hash,
+            )
 
         # — Embed query & search ─────────────────────────────────────
         query_vec = embedder.embed([query_text])[0]
@@ -285,7 +316,7 @@ def _sort_neighbors(neighbors: list[Neighbor]) -> list[Neighbor]:
 # ── Main entry point ────────────────────────────────────────────────
 
 
-def run_tool3(validated_inputs: dict[str, Any], repo_root: str) -> dict:
+def run_tool3(validated_inputs: dict[str, Any], repo_root: str, fingerprint_hash: str = "") -> dict:
     """Execute the full Tool 3 (Semantic Neighbor Search) pipeline.
 
     Steps:
@@ -359,6 +390,7 @@ def run_tool3(validated_inputs: dict[str, Any], repo_root: str) -> dict:
             index_stats=IndexStats(
                 chunks_total=0,
                 chunks_scanned=0,
+                indexed_files=0,
                 backend=backend,  # type: ignore[arg-type]
             ),
             diagnostics=diagnostics,
@@ -374,6 +406,7 @@ def run_tool3(validated_inputs: dict[str, Any], repo_root: str) -> dict:
         # Embedding only — fail if unavailable
         result = _run_embedding_path(
             query_text, chunks, top_k, min_score, diagnostics,
+            fingerprint_hash=fingerprint_hash, repo_root=repo_root,
         )
         if result is not None:
             neighbors = result
@@ -398,6 +431,7 @@ def run_tool3(validated_inputs: dict[str, Any], repo_root: str) -> dict:
         # auto: try embedding first, fallback to BM25
         result = _run_embedding_path(
             query_text, chunks, top_k, min_score, diagnostics,
+            fingerprint_hash=fingerprint_hash, repo_root=repo_root,
         )
         if result is not None:
             neighbors = result
@@ -440,9 +474,11 @@ def run_tool3(validated_inputs: dict[str, Any], repo_root: str) -> dict:
             )
 
     # ── 5. Assemble result ───────────────────────────────────────────
+    indexed_files = len({c.file for c in chunks})
     index_stats = IndexStats(
         chunks_total=chunks_total,
         chunks_scanned=chunks_scanned,
+        indexed_files=indexed_files,
         backend=backend,  # type: ignore[arg-type]
     )
 

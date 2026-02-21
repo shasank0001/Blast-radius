@@ -691,4 +691,5 @@ class TestRunTool3Integration:
         parsed = Tool3Result(**result)
         assert parsed.index_stats.chunks_total == 3
         assert parsed.index_stats.chunks_scanned == 3
+        assert parsed.index_stats.indexed_files == 2
         assert parsed.index_stats.backend == "bm25"

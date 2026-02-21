@@ -1224,7 +1224,7 @@ class TestModelIndexAdvanced:
     """Advanced model index scenarios."""
 
     def test_model_inheritance(self, tmp_path):
-        """Only direct BaseModel subclasses are detected (static AST heuristic)."""
+        """Transitive BaseModel subclasses are detected via inheritance traversal."""
         _write_py(tmp_path, "models.py", """\
             from pydantic import BaseModel
 
@@ -1238,9 +1238,10 @@ class TestModelIndexAdvanced:
         index = _build_model_index_simple(tmp_path, ["models.py"])
         # BaseRequest is a direct BaseModel subclass → detected
         assert "BaseRequest" in index
-        # OrderRequest inherits BaseRequest (not BaseModel directly) →
-        # NOT detected by the static heuristic.
-        assert "OrderRequest" not in index
+        # OrderRequest inherits BaseRequest which inherits BaseModel →
+        # detected via transitive inheritance traversal.
+        assert "OrderRequest" in index
+        assert "user_id" in index["OrderRequest"].fields
 
     def test_optional_fields(self, tmp_path):
         _write_py(tmp_path, "models.py", """\

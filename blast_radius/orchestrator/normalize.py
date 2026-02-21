@@ -318,15 +318,45 @@ def _entry_points_from_anchors(anchors: list[str]) -> list[str]:
     """Heuristically identify entry-point identifiers among *anchors*.
 
     An anchor is considered an entry point if it contains an HTTP method token
-    (e.g. ``"POST /orders"``) or looks like a route path (starts with ``/``).
+    (e.g. ``"POST /orders"``), looks like a route path (starts with ``/``),
+    or is already a Tool 2 symbol entry point (``"symbol:..."``).
+
+    Returned route-style entry points are normalized to Tool 2's required
+    ``"route:METHOD /path"`` format.
     """
+    def _normalize_tool2_entry_point(value: str) -> str | None:
+        raw = value.strip()
+        if not raw:
+            return None
+
+        if raw.startswith("route:"):
+            route_key = raw[len("route:"):].strip()
+            route_match = _HTTP_METHOD_PATTERN.search(route_key)
+            if route_match:
+                return f"route:{route_match.group(1).upper()} {route_match.group(2)}"
+            if route_key.startswith("/"):
+                return f"route:GET {route_key}"
+            return None
+
+        route_match = _HTTP_METHOD_PATTERN.search(raw)
+        if route_match:
+            return f"route:{route_match.group(1).upper()} {route_match.group(2)}"
+
+        if raw.startswith("/"):
+            return f"route:GET {raw}"
+
+        if raw.startswith("symbol:"):
+            return raw
+
+        return None
+
     entry_points: list[str] = []
+    seen: set[str] = set()
     for anchor in anchors:
-        anchor_stripped = anchor.strip()
-        if _HTTP_METHOD_PATTERN.search(anchor_stripped):
-            entry_points.append(anchor_stripped)
-        elif anchor_stripped.startswith("/"):
-            entry_points.append(anchor_stripped)
+        normalized = _normalize_tool2_entry_point(anchor)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            entry_points.append(normalized)
     return entry_points
 
 
@@ -368,14 +398,14 @@ def build_tool_plan(
     **Inclusion rules:**
 
     * **Tool 1** (``get_ast_dependencies``): **always** included.
-    * **Tool 2** (``trace_data_shape``): only when
-      ``change_spec.change_class == "api_change"`` **and** entry points can be
-      derived from anchors or ``entity_id``.
+        * **Tool 2** (``trace_data_shape``): only when
+            ``change_spec.change_class == "api_change"``, ``field_path`` is present,
+            and entry points can be derived from anchors or ``entity_id``.
     * **Tool 3** (``find_semantic_neighbors``): **always** included (cheap).
-    * **Tool 4** (``get_historical_coupling``): only when a ``.git`` directory
-      exists at *repo_root*.
-    * **Tool 5** (``get_covering_tests``): only when a test directory or test
-      files exist under *repo_root*.
+        * **Tool 4** (``get_historical_coupling``): only when a ``.git`` directory
+            exists at *repo_root* **and** target files are available.
+        * **Tool 5** (``get_covering_tests``): only when a test directory or test
+            files exist under *repo_root* **and** target files are available.
 
     Parameters
     ----------
@@ -421,70 +451,89 @@ def build_tool_plan(
         {
             "tool_name": _TOOL1_NAME,
             "inputs": {
-                "repo_root": repo_root,
                 "target_files": target_files,
-                "entity_id": change_spec.entity_id,
             },
             "priority": 1,
         }
     )
 
     # --- Tool 2: trace_data_shape — only for api_change with entry points --
-    if change_spec.change_class == "api_change":
+    if change_spec.change_class == "api_change" and change_spec.field_path:
         entry_points = _entry_points_from_anchors(anchors)
-        # Also pull an entry point from entity_id if it looks like a route
-        if _HTTP_METHOD_PATTERN.search(change_spec.entity_id):
-            if change_spec.entity_id not in entry_points:
-                entry_points.append(change_spec.entity_id)
+
+        # Also pull an entry point from entity_id when it looks route-like.
+        entity_id = change_spec.entity_id.strip()
+        entity_route_match = _HTTP_METHOD_PATTERN.search(entity_id)
+        if entity_id.startswith("route:"):
+            if entity_id not in entry_points:
+                entry_points.append(entity_id)
+        elif entity_route_match:
+            normalized_entity_ep = (
+                f"route:{entity_route_match.group(1).upper()} "
+                f"{entity_route_match.group(2)}"
+            )
+            if normalized_entity_ep not in entry_points:
+                entry_points.append(normalized_entity_ep)
+        elif entity_id.startswith("/"):
+            normalized_entity_ep = f"route:GET {entity_id}"
+            if normalized_entity_ep not in entry_points:
+                entry_points.append(normalized_entity_ep)
+
         if entry_points:
             plan.append(
                 {
                     "tool_name": _TOOL2_NAME,
                     "inputs": {
-                        "repo_root": repo_root,
-                        "entry_points": entry_points,
                         "field_path": change_spec.field_path,
-                        "target_files": target_files,
+                        "entry_points": entry_points,
                     },
                     "priority": 2,
                 }
             )
 
     # --- Tool 3: find_semantic_neighbors — ALWAYS (cheap) ------------------
+    query_tokens = [
+        change_spec.operation,
+        change_spec.entity_kind,
+        change_spec.entity_id,
+    ]
+    if change_spec.field_path:
+        query_tokens.append(change_spec.field_path)
+    query_text = " ".join(token.strip() for token in query_tokens if token.strip())
+    if len(query_text) < 3:
+        query_text = "change impact"
+
     plan.append(
         {
             "tool_name": _TOOL3_NAME,
             "inputs": {
-                "repo_root": repo_root,
-                "entity_id": change_spec.entity_id,
-                "target_files": target_files,
+                "query_text": query_text,
+                "scope": {"paths": target_files},
             },
             "priority": 3,
         }
     )
 
     # --- Tool 4: get_historical_coupling — only if .git exists -------------
-    if _has_git_dir(repo_root):
+    if target_files and _has_git_dir(repo_root):
         plan.append(
             {
                 "tool_name": _TOOL4_NAME,
                 "inputs": {
-                    "repo_root": repo_root,
-                    "target_files": target_files,
+                    "file_paths": target_files,
                 },
                 "priority": 4,
             }
         )
 
     # --- Tool 5: get_covering_tests — only if tests exist ------------------
-    if _has_tests(repo_root):
+    if target_files and _has_tests(repo_root):
+        impacted_nodes = [{"file": file_path, "kind": "module"} for file_path in target_files]
         plan.append(
             {
                 "tool_name": _TOOL5_NAME,
                 "inputs": {
-                    "repo_root": repo_root,
-                    "target_files": target_files,
-                    "entity_id": change_spec.entity_id,
+                    "impacted_nodes": impacted_nodes,
                 },
                 "priority": 5,
             }

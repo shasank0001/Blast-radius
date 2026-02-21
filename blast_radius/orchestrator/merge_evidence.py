@@ -135,7 +135,7 @@ def _safe_get(d: dict[str, Any], key: str, default: Any = None) -> Any:
 
 
 def _candidates_from_tool1(
-    tool1: dict[str, Any],
+    tool1: dict[str, Any] | None,
 ) -> list[ImpactCandidate]:
     candidates: list[ImpactCandidate] = []
     edges = _safe_get(tool1, "edges", [])
@@ -215,7 +215,7 @@ def _candidates_from_tool1(
 
 
 def _candidates_from_tool2(
-    tool2: dict[str, Any],
+    tool2: dict[str, Any] | None,
 ) -> list[ImpactCandidate]:
     candidates: list[ImpactCandidate] = []
     changed_field = _safe_get(tool2, "changed_field", "")
@@ -359,7 +359,7 @@ def _candidates_from_tool2(
 
 
 def _candidates_from_tool4(
-    tool4: dict[str, Any],
+    tool4: dict[str, Any] | None,
 ) -> list[ImpactCandidate]:
     candidates: list[ImpactCandidate] = []
     for coupling in _safe_get(tool4, "couplings", []):
@@ -414,7 +414,7 @@ def _candidates_from_tool4(
 
 
 def _candidates_from_tool3(
-    tool3: dict[str, Any],
+    tool3: dict[str, Any] | None,
 ) -> list[ImpactCandidate]:
     candidates: list[ImpactCandidate] = []
     for neighbor in _safe_get(tool3, "neighbors", []):
@@ -460,7 +460,7 @@ def _candidates_from_tool3(
 
 
 def _candidates_from_tool5(
-    tool5: dict[str, Any],
+    tool5: dict[str, Any] | None,
 ) -> list[ImpactCandidate]:
     candidates: list[ImpactCandidate] = []
     for test in _safe_get(tool5, "tests", []):
@@ -629,11 +629,11 @@ def assign_risk_surface(
 
 
 def merge_evidence(
-    tool1_result: dict[str, Any],
-    tool2_result: dict[str, Any],
-    tool3_result: dict[str, Any],
-    tool4_result: dict[str, Any],
-    tool5_result: dict[str, Any],
+    tool1_result: dict[str, Any] | None,
+    tool2_result: dict[str, Any] | None,
+    tool3_result: dict[str, Any] | None,
+    tool4_result: dict[str, Any] | None,
+    tool5_result: dict[str, Any] | None,
     change_spec: ChangeSpec,
 ) -> list[ImpactCandidate]:
     """Merge evidence from all five tools into a single candidate list.
@@ -648,12 +648,17 @@ def merge_evidence(
     """
     all_candidates: list[ImpactCandidate] = []
 
-    # Step 1-5: gather from each tool
-    all_candidates.extend(_candidates_from_tool1(tool1_result))
-    all_candidates.extend(_candidates_from_tool2(tool2_result))
-    all_candidates.extend(_candidates_from_tool4(tool4_result))
-    all_candidates.extend(_candidates_from_tool3(tool3_result))
-    all_candidates.extend(_candidates_from_tool5(tool5_result))
+    # Step 1-5: gather from each tool (skip if result is None)
+    if tool1_result is not None:
+        all_candidates.extend(_candidates_from_tool1(tool1_result))
+    if tool2_result is not None:
+        all_candidates.extend(_candidates_from_tool2(tool2_result))
+    if tool4_result is not None:
+        all_candidates.extend(_candidates_from_tool4(tool4_result))
+    if tool3_result is not None:
+        all_candidates.extend(_candidates_from_tool3(tool3_result))
+    if tool5_result is not None:
+        all_candidates.extend(_candidates_from_tool5(tool5_result))
 
     # Step 6: deduplicate
     merged = _deduplicate(all_candidates)

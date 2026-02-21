@@ -549,9 +549,9 @@ class TestRunTool5Integration:
             def test_compute():
                 assert app.core.compute() == 42
         """)
-        request = Tool5Request(
-            impacted_nodes=[ImpactedNode(file="app/core.py", symbol="compute")],
-        )
+        request = {
+            "impacted_nodes": [{"file": "app/core.py", "symbol": "compute"}],
+        }
         result = run_tool5(request, str(tmp_path))
         # Validate via schema
         parsed = Tool5Result(**result)
@@ -562,9 +562,9 @@ class TestRunTool5Integration:
 
     def test_run_tool5_no_tests(self, tmp_path):
         _write_py(tmp_path, "app/core.py", "x = 1\n")
-        request = Tool5Request(
-            impacted_nodes=[ImpactedNode(file="app/core.py")],
-        )
+        request = {
+            "impacted_nodes": [{"file": "app/core.py"}],
+        }
         result = run_tool5(request, str(tmp_path))
         parsed = Tool5Result(**result)
         assert parsed.tests == []
@@ -584,9 +584,9 @@ class TestRunTool5Integration:
             def test_process():
                 assert app.service.process()
         """)
-        request = Tool5Request(
-            impacted_nodes=[ImpactedNode(file="app/service.py", symbol="process")],
-        )
+        request = {
+            "impacted_nodes": [{"file": "app/service.py", "symbol": "process"}],
+        }
         r1 = run_tool5(request, str(tmp_path))
         r2 = run_tool5(request, str(tmp_path))
         assert r1 == r2
@@ -597,10 +597,10 @@ class TestRunTool5Integration:
         funcs = "\n".join(f"def test_{i}(): pass" for i in range(15))
         source = "import app.core\n\n" + funcs
         _write_py(tmp_path, "tests/test_lots.py", source)
-        request = Tool5Request(
-            impacted_nodes=[ImpactedNode(file="app/core.py")],
-            options=Tool5Options(max_tests=3, include_transitive=False),
-        )
+        request = {
+            "impacted_nodes": [{"file": "app/core.py"}],
+            "options": {"max_tests": 3, "include_transitive": False},
+        }
         result = run_tool5(request, str(tmp_path))
         parsed = Tool5Result(**result)
         assert parsed.selection_stats.tests_selected <= 3
@@ -621,9 +621,9 @@ class TestRunTool5Integration:
         bad.parent.mkdir(parents=True, exist_ok=True)
         bad.write_text("def test_broken(\n", encoding="utf-8")
 
-        request = Tool5Request(
-            impacted_nodes=[ImpactedNode(file="app/core.py")],
-        )
+        request = {
+            "impacted_nodes": [{"file": "app/core.py"}],
+        }
         result = run_tool5(request, str(tmp_path))
         parsed = Tool5Result(**result)
         # Should not crash; the good test should still be found
@@ -651,10 +651,10 @@ class TestRunTool5Integration:
             def test_process():
                 assert app.core.process() == []
         """)
-        request = Tool5Request(
-            impacted_nodes=[ImpactedNode(file="app/db.py")],
-            options=Tool5Options(include_transitive=True, transitive_depth=2),
-        )
+        request = {
+            "impacted_nodes": [{"file": "app/db.py"}],
+            "options": {"include_transitive": True, "transitive_depth": 2},
+        }
         result = run_tool5(request, str(tmp_path))
         parsed = Tool5Result(**result)
         assert len(parsed.tests) >= 1

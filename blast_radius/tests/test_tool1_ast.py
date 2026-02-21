@@ -421,6 +421,56 @@ class TestEmitEdges:
         assert calls[0].target_ref.qualified_name == "os.path.join"
         assert calls[0].resolution.status == "resolved"
 
+    def test_scope_alias_no_leak_inner_import_to_sibling_function(self):
+        source = textwrap.dedent("""\
+        def provider():
+            import json as j
+            return j.loads("{}")
+
+        def consumer():
+            return j.loads("{}")
+        """)
+        tree, nodes, source_lines = _parse_and_build(source, "scope_leak.py")
+        edges = emit_edges(tree, "scope_leak.py", nodes, Tool1Options(), source_lines)
+
+        consumer = next(n for n in nodes if n.kind == "function" and n.name == "consumer")
+        calls = [
+            e
+            for e in edges
+            if e.type == "calls"
+            and e.source == consumer.id
+            and e.metadata.call is not None
+            and e.metadata.call.callee_text == "j.loads"
+        ]
+        assert len(calls) == 1
+        assert calls[0].resolution.status == "unresolved"
+
+    def test_scope_alias_resolves_parent_chain_for_nested_function(self):
+        source = textwrap.dedent("""\
+        def outer():
+            import json
+
+            def inner():
+                return json.loads("{}")
+
+            return inner()
+        """)
+        tree, nodes, source_lines = _parse_and_build(source, "scope_parent.py")
+        edges = emit_edges(tree, "scope_parent.py", nodes, Tool1Options(), source_lines)
+
+        inner = next(n for n in nodes if n.kind == "function" and n.name == "inner")
+        calls = [
+            e
+            for e in edges
+            if e.type == "calls"
+            and e.source == inner.id
+            and e.metadata.call is not None
+            and e.metadata.call.callee_text == "json.loads"
+        ]
+        assert len(calls) == 1
+        assert calls[0].resolution.status == "resolved"
+        assert calls[0].target_ref.qualified_name == "json.loads"
+
     # ── inheritance edges ───────────────────────────────────────────
 
     def test_inheritance_edge(self, edges_and_nodes):
@@ -611,6 +661,70 @@ class TestCrossFileResolution:
         assert ambiguous[0].range is not None
         assert ambiguous[0].range.start.line == 1
         assert ambiguous[0].range.start.col == 0
+
+    def test_resolve_cross_file_edges_does_not_leak_alias_from_other_files(self, tmp_path):
+        (tmp_path / "utils.py").write_text(
+            textwrap.dedent("""\
+            def helper():
+                pass
+            """),
+            encoding="utf-8",
+        )
+        (tmp_path / "aliased.py").write_text(
+            "from utils import helper as h\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "main.py").write_text(
+            textwrap.dedent("""\
+            def run():
+                h()
+            """),
+            encoding="utf-8",
+        )
+
+        req = Tool1Request(target_files=["utils.py", "aliased.py", "main.py"])
+        result = Tool1Result(**run_tool1(req, str(tmp_path)))
+
+        calls = [
+            e
+            for e in result.edges
+            if e.type == "calls"
+            and e.metadata.call is not None
+            and e.metadata.call.callee_text == "h"
+        ]
+        assert len(calls) >= 1
+        assert all(e.resolution.status == "unresolved" for e in calls)
+
+    def test_resolve_cross_file_edges_uses_source_file_alias_map(self, tmp_path):
+        (tmp_path / "utils.py").write_text(
+            textwrap.dedent("""\
+            def helper():
+                pass
+            """),
+            encoding="utf-8",
+        )
+        (tmp_path / "main.py").write_text(
+            textwrap.dedent("""\
+            from utils import helper as h
+
+            def run():
+                h()
+            """),
+            encoding="utf-8",
+        )
+
+        req = Tool1Request(target_files=["utils.py", "main.py"])
+        result = Tool1Result(**run_tool1(req, str(tmp_path)))
+
+        calls = [
+            e
+            for e in result.edges
+            if e.type == "calls"
+            and e.metadata.call is not None
+            and e.metadata.call.callee_text == "h"
+        ]
+        assert len(calls) >= 1
+        assert any(e.resolution.status == "resolved" for e in calls)
 
 
 # ═══════════════════════════════════════════════════════════════════════

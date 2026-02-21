@@ -463,6 +463,175 @@ def _build_import_alias_map(
     return alias_map
 
 
+def _build_scope_parent_links(
+    symbol_table: list[ASTNode],
+) -> tuple[str, dict[str, str | None], dict[str, str]]:
+    """Build deterministic parent links between scope nodes.
+
+    Returns ``(module_scope_id, parent_by_scope, kind_by_scope)``.
+    """
+    if not symbol_table:
+        return "", {}, {}
+
+    scopes = [n for n in symbol_table if n.kind in {"module", "class", "function", "method"}]
+    if not scopes:
+        return "", {}, {}
+
+    module_nodes = [n for n in scopes if n.kind == "module"]
+    module_node = module_nodes[0] if module_nodes else scopes[0]
+    module_scope_id = module_node.id
+
+    parent_by_scope: dict[str, str | None] = {module_scope_id: None}
+    kind_by_scope: dict[str, str] = {n.id: n.kind for n in scopes}
+
+    for scope in scopes:
+        if scope.id == module_scope_id:
+            continue
+
+        start_line = scope.range.start.line
+        end_line = scope.range.end.line
+        candidates: list[ASTNode] = []
+        for container in scopes:
+            if container.id == scope.id:
+                continue
+            c_start = container.range.start.line
+            c_end = container.range.end.line
+            if c_start <= start_line and c_end >= end_line:
+                candidates.append(container)
+
+        if candidates:
+            candidates.sort(
+                key=lambda n: (
+                    n.range.end.line - n.range.start.line,
+                    1 if n.kind == "module" else 0,
+                    -n.range.start.line,
+                    -n.range.start.col,
+                    n.id,
+                )
+            )
+            parent_by_scope[scope.id] = candidates[0].id
+        else:
+            parent_by_scope[scope.id] = module_scope_id
+
+    return module_scope_id, parent_by_scope, kind_by_scope
+
+
+def _build_import_alias_maps_by_scope(
+    tree: ast.AST,
+    symbol_table: list[ASTNode],
+) -> tuple[
+    dict[str, dict[str, tuple[str, str]]],
+    dict[str, str | None],
+    str,
+    dict[str, str],
+]:
+    """Build per-scope alias maps and scope parent links."""
+    module_scope_id, parent_by_scope, kind_by_scope = _build_scope_parent_links(symbol_table)
+
+    alias_maps_by_scope: dict[str, dict[str, tuple[str, str]]] = {
+        scope_id: {} for scope_id in parent_by_scope
+    }
+    if module_scope_id and module_scope_id not in alias_maps_by_scope:
+        alias_maps_by_scope[module_scope_id] = {}
+
+    import_nodes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    import_nodes.sort(
+        key=lambda n: (
+            getattr(n, "lineno", 1),
+            getattr(n, "col_offset", 0),
+            0 if isinstance(n, ast.Import) else 1,
+        )
+    )
+
+    for node in import_nodes:
+        line = getattr(node, "lineno", 1)
+        col = getattr(node, "col_offset", 0)
+        scope = _find_enclosing_scope(symbol_table, line, col)
+        scope_id = scope.id
+        scope_aliases = alias_maps_by_scope.setdefault(scope_id, {})
+
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local_name = alias.asname or alias.name
+                scope_aliases[local_name] = (alias.name, "")
+                if alias.asname is None and "." in alias.name:
+                    root_name = alias.name.split(".", 1)[0]
+                    scope_aliases.setdefault(root_name, (root_name, ""))
+            continue
+
+        module = node.module or ""
+        level = node.level or 0
+        prefix = "." * level + module
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            local_name = alias.asname or alias.name
+            scope_aliases[local_name] = (prefix, alias.name)
+
+    return alias_maps_by_scope, parent_by_scope, module_scope_id, kind_by_scope
+
+
+def _compose_alias_view(
+    scope_id: str,
+    alias_maps_by_scope: dict[str, dict[str, tuple[str, str]]],
+    parent_by_scope: dict[str, str | None],
+    kind_by_scope: dict[str, str],
+) -> dict[str, tuple[str, str]]:
+    """Compose visible aliases for a scope by walking parent links."""
+    if not scope_id:
+        return {}
+
+    current_scope_id = scope_id
+    if current_scope_id not in parent_by_scope:
+        module_ids = [sid for sid, parent in parent_by_scope.items() if parent is None]
+        if module_ids:
+            current_scope_id = module_ids[0]
+        else:
+            return {}
+
+    chain: list[str] = []
+    seen: set[str] = set()
+    cur: str | None = current_scope_id
+    while cur is not None and cur not in seen:
+        seen.add(cur)
+        chain.append(cur)
+        cur = parent_by_scope.get(cur)
+
+    current_kind = kind_by_scope.get(current_scope_id, "")
+    skip_class_ancestors = current_kind in {"function", "method"}
+
+    merged: dict[str, tuple[str, str]] = {}
+    for sid in reversed(chain):
+        if skip_class_ancestors and sid != current_scope_id and kind_by_scope.get(sid) == "class":
+            continue
+        merged.update(alias_maps_by_scope.get(sid, {}))
+
+    return merged
+
+
+def _expand_name_via_alias_map(
+    name: str,
+    alias_map: dict[str, tuple[str, str]],
+) -> str | None:
+    """Resolve a name through an alias map into a candidate qualified name."""
+    root_name = name.split(".")[0]
+    if root_name not in alias_map:
+        return None
+
+    mod, orig = alias_map[root_name]
+    qname = f"{mod}.{orig}" if orig else mod
+
+    remaining = name.split(".", 1)
+    if len(remaining) > 1:
+        qname = f"{qname}.{remaining[1]}"
+
+    return qname
+
+
 # ── Edge emission ────────────────────────────────────────────────────
 
 
@@ -526,21 +695,8 @@ def _lookup_symbol(
             )
 
     # Check import alias map
-    root_name = name.split(".")[0]
-    if root_name in alias_map:
-        mod, orig = alias_map[root_name]
-        # Reconstruct qualified name
-        if orig:
-            qname = f"{mod}.{orig}"
-        else:
-            qname = mod
-        # If the call is on an attribute chain, append the rest
-        remaining = name.split(".", 1)
-        if len(remaining) > 1 and not orig:
-            qname = f"{mod}.{remaining[1]}"
-        elif len(remaining) > 1 and orig:
-            qname = f"{mod}.{orig}.{remaining[1]}"
-
+    qname = _expand_name_via_alias_map(name, alias_map)
+    if qname is not None:
         return (
             TargetRef(
                 kind="symbol",
@@ -576,7 +732,21 @@ def emit_edges(
 ) -> list[ASTEdge]:
     """Walk *tree* and emit relationship edges."""
     edges: list[ASTEdge] = []
-    alias_map = _build_import_alias_map(tree)
+    alias_maps_by_scope, parent_by_scope, module_scope_id, kind_by_scope = (
+        _build_import_alias_maps_by_scope(tree, symbol_table)
+    )
+    alias_view_cache: dict[str, dict[str, tuple[str, str]]] = {}
+
+    def _alias_view_for_scope(scope_id: str) -> dict[str, tuple[str, str]]:
+        resolved_scope = scope_id if scope_id in parent_by_scope else module_scope_id
+        if resolved_scope not in alias_view_cache:
+            alias_view_cache[resolved_scope] = _compose_alias_view(
+                resolved_scope,
+                alias_maps_by_scope,
+                parent_by_scope,
+                kind_by_scope,
+            )
+        return alias_view_cache[resolved_scope]
 
     # Find the module node for use as default scope
     module_node: ASTNode | None = None
@@ -695,8 +865,9 @@ def emit_edges(
                 col = node.col_offset
                 callee_text = _resolve_callee_text(node)
                 enclosing = _find_enclosing_scope(symbol_table, line, col)
+                alias_view = _alias_view_for_scope(enclosing.id)
                 target_ref, confidence, strategy = _lookup_symbol(
-                    callee_text, symbol_table, alias_map,
+                    callee_text, symbol_table, alias_view,
                 )
                 eid = _compute_edge_id(
                     enclosing.id, "calls", callee_text, line, col,
@@ -756,8 +927,11 @@ def emit_edges(
                         base_text = ast.unparse(base)
                     except Exception:
                         base_text = "<unknown>"
+
+                    base_scope = parent_by_scope.get(class_node.id) or class_node.id
+                    alias_view = _alias_view_for_scope(base_scope)
                     target_ref, confidence, strategy = _lookup_symbol(
-                        base_text, symbol_table, alias_map,
+                        base_text, symbol_table, alias_view,
                     )
                     line = base.lineno
                     col = base.col_offset
@@ -818,8 +992,9 @@ def emit_edges(
                 ref_context = "load"
 
             enclosing = _find_enclosing_scope(symbol_table, line, col)
+            alias_view = _alias_view_for_scope(enclosing.id)
             target_ref, confidence, strategy = _lookup_symbol(
-                ref_name, symbol_table, alias_map,
+                ref_name, symbol_table, alias_view,
             )
             eid = _compute_edge_id(
                 enclosing.id,
@@ -894,7 +1069,10 @@ def build_cross_file_index(
 def resolve_cross_file_edges(
     edges: list[ASTEdge],
     cross_file_index: dict[str, tuple[str, str, str]],
-    import_maps: dict[str, dict[str, tuple[str, str]]],
+    alias_maps_by_file: dict[str, dict[str, dict[str, tuple[str, str]]]],
+    parent_scopes_by_file: dict[str, dict[str, str | None]],
+    scope_kinds_by_file: dict[str, dict[str, str]],
+    node_file_by_id: dict[str, str],
 ) -> list[ASTEdge]:
     """Attempt to resolve unresolved edges against the cross-file index.
 
@@ -926,16 +1104,20 @@ def resolve_cross_file_edges(
                     }
                 )
             else:
-                # Try resolving through import maps
-                # For import edges with a module reference, check all import maps
-                for _file, amap in import_maps.items():
-                    root = qname.split(".")[0]
-                    if root in amap:
-                        mod, orig = amap[root]
-                        full_qname = f"{mod}.{orig}" if orig else mod
-                        remaining = qname.split(".", 1)
-                        if len(remaining) > 1:
-                            full_qname = f"{full_qname}.{remaining[1]}" if orig else f"{mod}.{remaining[1]}"
+                source_file = node_file_by_id.get(edge.source, "")
+                if source_file:
+                    file_alias_maps = alias_maps_by_file.get(source_file, {})
+                    file_parent_map = parent_scopes_by_file.get(source_file, {})
+                    file_scope_kinds = scope_kinds_by_file.get(source_file, {})
+
+                    if file_alias_maps and file_parent_map:
+                        alias_view = _compose_alias_view(
+                            edge.source,
+                            file_alias_maps,
+                            file_parent_map,
+                            file_scope_kinds,
+                        )
+                        full_qname = _expand_name_via_alias_map(qname, alias_view)
 
                         if full_qname in cross_file_index:
                             file, nid, kind = cross_file_index[full_qname]
@@ -955,7 +1137,6 @@ def resolve_cross_file_edges(
                                     ),
                                 }
                             )
-                            break
 
         resolved_edges.append(edge)
 
@@ -1001,7 +1182,9 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
     all_edges: list[ASTEdge] = []
     diagnostics: list[Diagnostic] = []
     nodes_by_file: dict[str, list[ASTNode]] = {}
-    import_maps: dict[str, dict[str, tuple[str, str]]] = {}
+    alias_maps_by_file: dict[str, dict[str, dict[str, tuple[str, str]]]] = {}
+    parent_scopes_by_file: dict[str, dict[str, str | None]] = {}
+    scope_kinds_by_file: dict[str, dict[str, str]] = {}
     trees: dict[str, ast.AST] = {}
     parsed_ok = 0
     parsed_error = 0
@@ -1058,9 +1241,13 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
         nodes_by_file[fi.path] = nodes
         all_nodes.extend(nodes)
 
-        # Step 4: Build import alias map
-        alias_map = _build_import_alias_map(tree)
-        import_maps[fi.path] = alias_map
+        # Step 4: Build scope-aware import alias maps
+        alias_maps, parent_scopes, _module_scope_id, scope_kinds = (
+            _build_import_alias_maps_by_scope(tree, nodes)
+        )
+        alias_maps_by_file[fi.path] = alias_maps
+        parent_scopes_by_file[fi.path] = parent_scopes
+        scope_kinds_by_file[fi.path] = scope_kinds
 
     # Step 5: Emit edges for each file
     for fi in file_infos:
@@ -1098,7 +1285,15 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
         )
 
     # Step 7: Resolve cross-file edges
-    all_edges = resolve_cross_file_edges(all_edges, cross_file_index, import_maps)
+    node_file_by_id = {n.id: n.file for n in all_nodes}
+    all_edges = resolve_cross_file_edges(
+        all_edges,
+        cross_file_index,
+        alias_maps_by_file,
+        parent_scopes_by_file,
+        scope_kinds_by_file,
+        node_file_by_id,
+    )
 
     # Step 8: Finalize and sort
     all_nodes, all_edges, diagnostics = finalize_and_sort(

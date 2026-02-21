@@ -41,6 +41,8 @@
 - `parse_mode="tree_sitter"` is accepted; when `tree_sitter` is unavailable, runtime falls back to `python_ast` and emits a warning diagnostic.
 - `resolve_imports` and `resolve_calls` are accepted request options in v1; current runtime still performs local/cross-file resolution.
 - `max_edges_per_file` is not part of the current Tool 1 request schema.
+- Import alias resolution is scope-aware (aliases are composed from the enclosing scope chain instead of a single global map).
+- Cross-file alias fallback is source-file-aware (an unresolved edge resolves only against aliases visible from its source scope/file).
 
 ### key invariants
 

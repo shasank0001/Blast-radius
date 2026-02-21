@@ -755,6 +755,7 @@ After completing all milestones M1–M7, a thorough review pass identified and r
 
 ### Documentation sync (2026-02-21)
 - Tool 1 docs aligned with implementation: removed `max_edges_per_file` claims, clarified `parse_mode` fallback semantics, and documented `ambiguous_symbol` diagnostics behavior.
+- Tool 1 docs updated for scoped import-alias resolution and source-file-aware cross-file alias fallback behavior.
 
 ### Test impact
 - Tests: 406 → 434 (28 net new)
@@ -781,7 +782,7 @@ After completing all milestones M1–M7, a thorough review pass identified and r
 | `test_ids.py` | 24 | canonical_json, run_id, query_id, cache_key, normalize, diff_hash |
 | `test_fingerprint.py` | 16 | safe_read_file, glob_python_files, file_hash, repo fingerprint |
 | `test_cache.py` | 21 | CacheDB CRUD, stats, cleanup (age + size cap), build_cache_key |
-| `test_tool1_ast.py` | 66 | AST engine: nodes, edges, cross-file, ambiguity, determinism, parse-mode fallback, integration |
+| `test_tool1_ast.py` | 77 | AST engine: nodes, edges, cross-file, ambiguity, determinism, parse-mode fallback, integration |
 | `test_tool2.py` | 94 | Data lineage: IDs, routes, models, field tracing, entry points, integration, determinism |
 | `test_tool3.py` | 38 | Semantic neighbors: tokenization, chunking, BM25 search, indexed_files, integration, diagnostics |
 | `test_tool4.py` | 34 | Temporal coupling: helpers, git parsing, rename maps, coupling scoring, integration |

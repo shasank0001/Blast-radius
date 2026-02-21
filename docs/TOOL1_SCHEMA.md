@@ -49,6 +49,8 @@ Tool 1 provides **hard structural evidence** for the blast-radius system: module
 - `resolution.status` supports `ambiguous` in schema, but current Tool 1 runtime primarily emits `resolved` or `unresolved` for edges.
 - Duplicate qualified names are surfaced as diagnostics with `code="ambiguous_symbol"`.
 - `Position.offset` is best-effort and commonly remains `-1` in current output.
+- Import alias lookup is scope-aware: nested scopes inherit parent aliases but do not leak aliases to sibling/outer scopes.
+- Cross-file alias fallback uses the edge source file/scope only (no alias resolution using unrelated files).
 
 ---
 

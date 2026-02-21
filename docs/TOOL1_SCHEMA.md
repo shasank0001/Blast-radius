@@ -43,6 +43,13 @@ Tool 1 provides **hard structural evidence** for the blast-radius system: module
 - `options` (optional): configuration flags.
   - `parse_mode`: `python_ast | tree_sitter` (v1 implementations may support only `python_ast` and still be schema-compliant).
 
+### Current runtime notes (2026-02-21)
+
+- `parse_mode="tree_sitter"` falls back to `python_ast` with a warning diagnostic when `tree_sitter` is unavailable.
+- `resolution.status` supports `ambiguous` in schema, but current Tool 1 runtime primarily emits `resolved` or `unresolved` for edges.
+- Duplicate qualified names are surfaced as diagnostics with `code="ambiguous_symbol"`.
+- `Position.offset` is best-effort and commonly remains `-1` in current output.
+
 ---
 
 ## Response envelope
@@ -241,7 +248,7 @@ Fields:
 - `file` (required)
 - `severity` (required): `info | warning | error`
 - `message` (required)
-- `range` (required)
+- `range` (optional)
 
 ---
 

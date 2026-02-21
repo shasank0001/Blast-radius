@@ -444,6 +444,9 @@ def _build_import_alias_map(
             for alias in node.names:
                 local_name = alias.asname or alias.name
                 alias_map[local_name] = (alias.name, "")
+                if alias.asname is None and "." in alias.name:
+                    root_name = alias.name.split(".", 1)[0]
+                    alias_map.setdefault(root_name, (root_name, ""))
 
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
@@ -473,7 +476,7 @@ def _find_enclosing_scope(
     Falls back to the module node if nothing else matches.
     """
     best: ASTNode | None = None
-    best_size = float("inf")
+    best_key: tuple[int, int, int, str] | None = None
     module: ASTNode | None = None
 
     for n in nodes:
@@ -484,8 +487,9 @@ def _find_enclosing_scope(
         n_end = n.range.end.line
         if n_start <= line <= n_end:
             size = n_end - n_start
-            if size < best_size:
-                best_size = size
+            key = (size, -n_start, -n.range.start.col, n.id)
+            if best_key is None or key < best_key:
+                best_key = key
                 best = n
     return best if best is not None else module  # type: ignore[return-value]
 
@@ -591,13 +595,14 @@ def emit_edges(
                 for alias in node.names:
                     line = node.lineno
                     col = node.col_offset
+                    import_scope = _find_enclosing_scope(symbol_table, line, col)
                     target_module = alias.name
                     target_ref = TargetRef(
                         kind="module",
                         qualified_name=target_module,
                     )
                     eid = _compute_edge_id(
-                        module_node.id, "imports", target_module, line, col,
+                        import_scope.id, "imports", target_module, line, col,
                     )
                     snippet = _snippet_from_lines(
                         source_lines, line, line, options.max_snippet_chars,
@@ -606,7 +611,7 @@ def emit_edges(
                         ASTEdge(
                             id=eid,
                             type="imports",
-                            source=module_node.id,
+                            source=import_scope.id,
                             target_ref=target_ref,
                             range=Range(
                                 start=Position(line=line, col=col),
@@ -632,7 +637,8 @@ def emit_edges(
                 level = node.level or 0
                 line = node.lineno
                 col = node.col_offset
-                for alias in node.names:
+                import_scope = _find_enclosing_scope(symbol_table, line, col)
+                for alias_idx, alias in enumerate(node.names):
                     if alias.name == "*":
                         target_ref = TargetRef(
                             kind="module",
@@ -646,7 +652,7 @@ def emit_edges(
                             qualified_name=ref_str,
                         )
                     eid = _compute_edge_id(
-                        module_node.id, "imports", ref_str, line, col + (node.names.index(alias)),
+                        import_scope.id, "imports", ref_str, line, col + alias_idx,
                     )
                     snippet = _snippet_from_lines(
                         source_lines, line, line, options.max_snippet_chars,
@@ -655,7 +661,7 @@ def emit_edges(
                         ASTEdge(
                             id=eid,
                             type="imports",
-                            source=module_node.id,
+                            source=import_scope.id,
                             target_ref=target_ref,
                             range=Range(
                                 start=Position(line=line, col=col),
@@ -967,9 +973,15 @@ def finalize_and_sort(
     """Sort nodes, edges and diagnostics into deterministic order."""
     sorted_nodes = sorted(nodes, key=lambda n: n.id)
     sorted_edges = sorted(edges, key=lambda e: (e.source, e.type, e.target, e.id))
+
+    def _diag_key(d: Diagnostic) -> tuple[str, int, int, str, str]:
+        if d.range is not None:
+            return (d.file, d.range.start.line, d.range.start.col, d.code or "", d.message)
+        return (d.file, 10**9, 10**9, d.code or "", d.message)
+
     sorted_diags = sorted(
         diagnostics,
-        key=lambda d: (d.file, d.range.start.line, d.range.start.col),
+        key=_diag_key,
     )
     return sorted_nodes, sorted_edges, sorted_diags
 
@@ -1076,6 +1088,10 @@ def run_tool1(request: Tool1Request, repo_root: str) -> dict:
                 message=(
                     f"Ambiguous symbol '{amb['qualified_name']}': "
                     f"already defined in {amb['file1']}"
+                ),
+                range=Range(
+                    start=Position(line=1, col=0),
+                    end=Position(line=1, col=0),
                 ),
                 code="ambiguous_symbol",
             )

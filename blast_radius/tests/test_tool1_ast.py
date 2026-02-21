@@ -366,6 +366,61 @@ class TestEmitEdges:
         assert "os.path.join" in targets
         assert "json" in targets
 
+    def test_import_edge_source_is_enclosing_function(self):
+        source = textwrap.dedent("""\
+        def handler():
+            import json
+            return json.loads("{}")
+        """)
+        tree, nodes, source_lines = _parse_and_build(source, "scope_import.py")
+        edges = emit_edges(tree, "scope_import.py", nodes, Tool1Options(), source_lines)
+
+        fn_node = next(n for n in nodes if n.kind == "function" and n.name == "handler")
+        import_edges = [
+            e for e in edges if e.type == "imports" and e.target_ref.qualified_name == "json"
+        ]
+        assert len(import_edges) == 1
+        assert import_edges[0].source == fn_node.id
+
+    def test_importfrom_edge_source_is_enclosing_function(self):
+        source = textwrap.dedent("""\
+        def handler():
+            from os.path import join
+            return join("a", "b")
+        """)
+        tree, nodes, source_lines = _parse_and_build(source, "scope_importfrom.py")
+        edges = emit_edges(tree, "scope_importfrom.py", nodes, Tool1Options(), source_lines)
+
+        fn_node = next(n for n in nodes if n.kind == "function" and n.name == "handler")
+        import_edges = [
+            e
+            for e in edges
+            if e.type == "imports" and e.target_ref.qualified_name == "os.path.join"
+        ]
+        assert len(import_edges) == 1
+        assert import_edges[0].source == fn_node.id
+
+    def test_dotted_import_call_resolution_uses_root_alias(self):
+        source = textwrap.dedent("""\
+        import os.path
+
+        def go():
+            return os.path.join("a", "b")
+        """)
+        tree, nodes, source_lines = _parse_and_build(source, "dotted_import.py")
+        edges = emit_edges(tree, "dotted_import.py", nodes, Tool1Options(), source_lines)
+
+        calls = [
+            e
+            for e in edges
+            if e.type == "calls"
+            and e.metadata.call is not None
+            and e.metadata.call.callee_text == "os.path.join"
+        ]
+        assert len(calls) == 1
+        assert calls[0].target_ref.qualified_name == "os.path.join"
+        assert calls[0].resolution.status == "resolved"
+
     # ── inheritance edges ───────────────────────────────────────────
 
     def test_inheritance_edge(self, edges_and_nodes):
@@ -540,6 +595,22 @@ class TestCrossFileResolution:
         assert len(call_edges) >= 1
         resolved_calls = [e for e in call_edges if e.resolution.status == "resolved"]
         assert len(resolved_calls) >= 1
+
+    def test_run_tool1_ambiguous_symbol_diagnostic_does_not_crash_finalize(self, tmp_path):
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        pkg = tmp_path / "a"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("y = 2\n", encoding="utf-8")
+
+        req = Tool1Request(target_files=["a.py", "a/__init__.py"])
+        result_dict = run_tool1(req, str(tmp_path))
+        result = Tool1Result(**result_dict)
+
+        ambiguous = [d for d in result.diagnostics if d.code == "ambiguous_symbol"]
+        assert len(ambiguous) >= 1
+        assert ambiguous[0].range is not None
+        assert ambiguous[0].range.start.line == 1
+        assert ambiguous[0].range.start.col == 0
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -866,6 +937,26 @@ class TestFinalize:
         assert sorted_diags[0].file == "a.py"
         assert sorted_diags[1].file == "b.py"
 
+    def test_diagnostics_sorted_when_range_missing(self):
+        with_range = Diagnostic(
+            file="a.py",
+            severity="warning",
+            message="with range",
+            range=Range(
+                start=Position(line=2, col=0),
+                end=Position(line=2, col=3),
+            ),
+        )
+        no_range = Diagnostic(
+            file="a.py",
+            severity="warning",
+            message="without range",
+        )
+
+        _, _, sorted_diags = finalize_and_sort([], [], [no_range, with_range])
+        assert sorted_diags[0].message == "with range"
+        assert sorted_diags[1].message == "without range"
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Extra: TestExtractSignature
@@ -931,6 +1022,18 @@ class TestBuildImportAliasMap:
         amap = _build_import_alias_map(tree)
         # Star imports should not appear in the map
         assert len(amap) == 0
+
+    def test_dotted_import_maps_root_and_full(self):
+        tree = ast.parse("import os.path")
+        amap = _build_import_alias_map(tree)
+        assert amap["os.path"] == ("os.path", "")
+        assert amap["os"] == ("os", "")
+
+    def test_dotted_import_with_asname_does_not_bind_root(self):
+        tree = ast.parse("import os.path as op")
+        amap = _build_import_alias_map(tree)
+        assert amap["op"] == ("os.path", "")
+        assert "os" not in amap
 
 
 # ═══════════════════════════════════════════════════════════════════════

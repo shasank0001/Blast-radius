@@ -20,7 +20,6 @@
     "include_inheritance_edges": true,
     "resolve_imports": true,
     "resolve_calls": true,
-    "max_edges_per_file": 5000,
     "max_snippet_chars": 240,
     "parse_mode": "tree_sitter"
   }
@@ -36,6 +35,12 @@
 - `edges[]`: `imports|calls|inherits|references`
 - `diagnostics[]`: syntax/resolution warnings/errors
 - `stats`: parse/edge counts + cache stats
+
+### implementation alignment (2026-02-21)
+
+- `parse_mode="tree_sitter"` is accepted; when `tree_sitter` is unavailable, runtime falls back to `python_ast` and emits a warning diagnostic.
+- `resolve_imports` and `resolve_calls` are accepted request options in v1; current runtime still performs local/cross-file resolution.
+- `max_edges_per_file` is not part of the current Tool 1 request schema.
 
 ### key invariants
 
@@ -78,8 +83,8 @@
 
 ### caching
 
-- per-file cache key: `sha256(file_hash + parse_mode + tool_impl_version)`
 - query cache key: envelope-level canonical key
+- per-file parse cache is not implemented in the current runtime
 
 ### determinism
 

@@ -753,6 +753,9 @@ After completing all milestones M1–M7, a thorough review pass identified and r
 8. **schemas/tool3_semantic.py + tool3_semantic_neighbors.py**: Added `indexed_files: int = 0` to `IndexStats`, populated with unique file count.
 9. **tests/fixtures/tool3_response.json + tool4_response.json**: Updated fixtures for new fields.
 
+### Documentation sync (2026-02-21)
+- Tool 1 docs aligned with implementation: removed `max_edges_per_file` claims, clarified `parse_mode` fallback semantics, and documented `ambiguous_symbol` diagnostics behavior.
+
 ### Test impact
 - Tests: 406 → 434 (28 net new)
 - New test file: `test_orchestrator_units.py` — 23 tests for `normalize_intent`, `parse_unified_diff`, `merge_evidence`, `prune_candidates`

@@ -7,6 +7,11 @@ This index links all detailed planning artifacts generated for the Blast Radius 
 - [Main MCP Detailed Plan](MAIN_MCP_DETAILED_PLAN.md)
 - [Coding Agent Flow Implementation Plan](CODING_AGENT_FLOW_IMPLEMENTATION_PLAN.md)
 - [Alignment Crosscheck Report](ALIGNMENT_CROSSCHECK_REPORT.md)
+- [Blast Radius Workflow Skill (Agent + User)](BLAST_RADIUS_WORKFLOW_SKILL.md)
+
+## Skills
+
+- [Blast Radius Workflow Skill Package](../skills/blast-radius-workflow/SKILL.md)
 
 ## Tool Plans
 
